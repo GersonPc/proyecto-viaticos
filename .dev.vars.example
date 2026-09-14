@@ -1,0 +1,2 @@
+# Copia este archivo como .dev.vars solo cuando agregues secretos locales.
+# Nunca confirmes .dev.vars en Git.
