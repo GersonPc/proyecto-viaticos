@@ -172,3 +172,7 @@ dist
 
 # Local test artifacts
 test-results/
+
+# Local PDF previews and samples (may contain request data)
+/tmp/
+/output/
