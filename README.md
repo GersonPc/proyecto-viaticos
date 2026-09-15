@@ -30,7 +30,15 @@ Abre `http://localhost:5173`.
 | `pnpm build`  | Genera el artefacto de producción.               |
 | `pnpm deploy` | Compila y publica el starter en Cloudflare.      |
 
-## Colaboración
+## Publicación automática
+
+Producción: <https://proyecto-viaticos.fybertechdisney.workers.dev/>.
+
+Cloudflare Workers Builds está conectado a `GersonPc/proyecto-viaticos` con `main` como rama de producción. Cada push o merge a `main` inicia una compilación y, si termina correctamente, publica la nueva versión en el mismo dominio.
+
+Configuración: directorio raíz `/`, compilación `npm run build` y despliegue `npx wrangler deploy`. El estado y los registros se consultan en Cloudflare → proyecto-viaticos → Implementaciones → Builds recientes. Si una compilación falla, producción conserva la última versión publicada correctamente.
+
+## Colaboración en GitHub
 
 Trabaja en una rama independiente y abre un pull request:
 
