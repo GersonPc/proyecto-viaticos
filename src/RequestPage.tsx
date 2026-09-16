@@ -77,13 +77,7 @@ function RequestPage({
 				<FitText text={String(totalKilometers(request))} x={430.86} y={104.66} width={37} size={5.88} font="Arial" bold />
 				<FitText text={`Q${money(kilometerCost(request))}`} x={636.2} y={104.54} width={190} size={5.28} font="Arial" bold />
 				<TextLines value={request.serviceTickets.join(', ')} x={431.1} y={112.1} width={122} limit={40} />
-				<TextLines
-					value={request.projectTickets.length ? `NO. ${request.projectTickets.join(', ')}` : ''}
-					x={636.2}
-					y={111.62}
-					width={192}
-					limit={60}
-				/>
+				<TextLines value={request.projectTickets.join(', ')} x={636.2} y={111.62} width={192} limit={60} />
 				<FitText text={request.concept} x={449.56} y={127.34} width={565} size={7.44} font="Arial" />
 				<FitText text={request.objective} x={107.53} y={141.98} width={109} size={5.28} font="Arial" />
 				{columns.map((column, index) => {

@@ -238,32 +238,29 @@ export function RequestFields({ form, setForm }: { form: RequestForm; setForm: D
 											/>
 										)}
 										{meal ? (
-											<div className="meal-choice" role="group" aria-label={row.label}>
-												{([true, false] as const).map((enabled) => (
-													<label key={String(enabled)}>
-														<input
-															type="radio"
-															name={`${meal}-${activeDate}`}
-															aria-label={`${row.label}: ${enabled ? 'Sí' : 'No'}`}
-															checked={Boolean(request.meals[activeDate]?.[meal]) === enabled}
-															onChange={() =>
-																setForm((current) => ({
-																	...current,
-																	request: {
-																		...current.request,
-																		meals: {
-																			...current.request.meals,
-																			[activeDate]: { ...current.request.meals[activeDate], [meal]: enabled },
-																		},
-																	},
-																}))
-															}
-														/>
-														{enabled ? 'Sí' : 'No'}
-													</label>
-												))}
-												<small>Q{money(request.meals[activeDate]?.[meal] ? MEAL_RATES[meal] : 0)}</small>
-											</div>
+											<label className="meal-choice">
+												<input
+													type="checkbox"
+													role="switch"
+													aria-label={row.label}
+													checked={Boolean(request.meals[activeDate]?.[meal])}
+													onChange={(event) => {
+														const enabled = event.target.checked;
+														setForm((current) => ({
+															...current,
+															request: {
+																...current.request,
+																meals: {
+																	...current.request.meals,
+																	[activeDate]: { ...current.request.meals[activeDate], [meal]: enabled },
+																},
+															},
+														}));
+													}}
+												/>
+												<span className="meal-switch" aria-hidden="true" />
+												<span className="meal-amount">Q{money(request.meals[activeDate]?.[meal] ? MEAL_RATES[meal] : 0)}</span>
+											</label>
 										) : (
 											<input
 												aria-label={`${row.label || `Gasto extra ${index - 4}`} (GTQ)`}

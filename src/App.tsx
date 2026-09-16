@@ -45,27 +45,13 @@ const fileToDataUrl = (file: File) =>
 		reader.readAsDataURL(file);
 	});
 
-function TecnasaHeader() {
-	return (
-		<div className="document-brand">
-			<img src="/tecnasa-logo.png" alt="TECNASA" />
-			<div className="document-brand-line" />
-		</div>
-	);
-}
-
 function MapPage({ images, pageNumber }: { images: TravelImage[]; pageNumber: number }) {
 	return (
 		<section className="paper-sheet portrait-sheet map-sheet" aria-label={`Mapa y cotización, página ${pageNumber}`}>
-			<TecnasaHeader />
-			<h2 className="document-title">MAPA - COTIZACIÓN</h2>
 			<div className={`map-image-grid images-${images.length}`}>
 				{images.map((image, index) => (
 					<figure key={image.id}>
 						<img src={image.src} alt={`Ruta o cotización adjunta ${index + 1}`} />
-						<figcaption>
-							{image.name} · {formatDate(image.date)} · {image.kilometers || '0'} km · Q{money(imageFuelCost(image))}
-						</figcaption>
 					</figure>
 				))}
 			</div>

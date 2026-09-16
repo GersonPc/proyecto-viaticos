@@ -679,13 +679,10 @@ button:disabled {
 	margin-top: 16px;
 }
 
-.map-sheet .document-title {
-	margin-bottom: 2cqw;
-}
 .map-image-grid {
 	display: grid;
 	gap: 1.2cqw;
-	height: calc(100% - 17cqw);
+	height: 100%;
 }
 .map-image-grid.images-1 {
 	grid-template-rows: minmax(0, 1fr);
@@ -697,27 +694,15 @@ button:disabled {
 	grid-template-rows: repeat(3, minmax(0, 1fr));
 }
 .map-sheet figure {
-	display: grid;
-	grid-template-rows: minmax(0, 1fr) auto;
-	gap: 0.55cqw;
+	min-width: 0;
 	min-height: 0;
 	margin: 0;
-	padding: 0.7cqw;
-	border: 0.1cqw solid #cbd3dc;
-	border-radius: 0.45cqw;
 }
 .map-sheet figure img {
+	display: block;
 	width: 100%;
 	height: 100%;
 	object-fit: contain;
-}
-.map-sheet figcaption {
-	overflow: hidden;
-	color: #5c6878;
-	font-size: 1.1cqw;
-	text-align: center;
-	text-overflow: ellipsis;
-	white-space: nowrap;
 }
 
 @media (max-width: 1180px) {
@@ -864,26 +849,63 @@ button:disabled {
 	color: #9d332b;
 }
 .meal-choice {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px 12px;
-	align-items: center;
-}
-.meal-choice label {
+	position: relative;
 	display: flex;
 	flex-direction: row;
-	gap: 4px;
+	gap: 12px;
 	align-items: center;
-	font-size: 13px;
+	min-height: 44px;
+	cursor: pointer;
 }
 .meal-choice input {
-	width: 16px;
-	height: 16px;
+	position: absolute;
+	width: 1px;
+	height: 1px;
 	margin: 0;
 	padding: 0;
-	accent-color: var(--blue);
+	opacity: 0;
 }
-.meal-choice small {
-	flex-basis: 100%;
+.meal-switch {
+	flex: 0 0 40px;
+	width: 40px;
+	height: 24px;
+	padding: 3px;
+	border-radius: 999px;
+	background: #bdc9d7;
+	transition: background 160ms ease;
+}
+.meal-switch::before {
+	content: '';
+	display: block;
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	background: #fff;
+	box-shadow: 0 1px 3px rgb(20 34 56 / 18%);
+	transition: transform 160ms ease;
+}
+.meal-choice input:checked + .meal-switch {
+	background: var(--blue);
+}
+.meal-choice input:checked + .meal-switch::before {
+	transform: translateX(16px);
+}
+.meal-choice input:focus-visible + .meal-switch {
+	outline: 3px solid #8ab8f7;
+	outline-offset: 3px;
+}
+.meal-amount {
 	color: var(--muted);
+	font-size: 13px;
+	font-weight: 650;
+	font-variant-numeric: tabular-nums;
+}
+.meal-choice input:checked ~ .meal-amount {
+	color: var(--blue);
+}
+@media (prefers-reduced-motion: reduce) {
+	.meal-switch,
+	.meal-switch::before {
+		transition: none;
+	}
 }
