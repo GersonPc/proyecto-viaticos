@@ -79,7 +79,7 @@ function RequestPage({
 				<TextLines value={request.serviceTickets.join(', ')} x={431.1} y={112.1} width={122} limit={40} />
 				<TextLines value={request.projectTickets.join(', ')} x={636.2} y={111.62} width={192} limit={60} />
 				<FitText text={request.concept} x={449.56} y={127.34} width={565} size={7.44} font="Arial" />
-				<FitText text={request.objective} x={107.53} y={141.98} width={109} size={5.28} font="Arial" />
+				<FitText text={request.clients.join('; ')} x={449.56} y={135.02} width={565} size={5.88} font="Arial" />
 				{columns.map((column, index) => {
 					const center = (columnEdges[index] + columnEdges[index + 1]) / 2;
 					const width = columnEdges[index + 1] - columnEdges[index] - 3;

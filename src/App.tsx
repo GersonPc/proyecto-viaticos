@@ -11,6 +11,7 @@ import {
 	money,
 	tripDates,
 	validDecimal,
+	toCents,
 } from './request';
 import { RequestPages } from './RequestPage';
 import { RequestFields } from './RequestFields';
@@ -75,7 +76,7 @@ export default function App() {
 	const mapImages = form.request.images;
 	const setMapImages = (update: (images: TravelImage[]) => TravelImage[]) =>
 		setForm((current) => ({ ...current, request: { ...current.request, images: update(current.request.images) } }));
-	const updateMap = (id: string, key: 'kilometers' | 'date', value: string) =>
+	const updateMap = <Key extends 'kilometers' | 'price' | 'date' | 'kind'>(id: string, key: Key, value: TravelImage[Key]) =>
 		setMapImages((images) => images.map((image) => (image.id === id ? { ...image, [key]: value } : image)));
 	const [errors, setErrors] = useState<string[]>([]);
 	const [preparingPrint, setPreparingPrint] = useState(false);
@@ -162,7 +163,7 @@ export default function App() {
 					const decoded = new Image();
 					decoded.src = src;
 					await decoded.decode();
-					return { id: `map-image-${nextImageId++}`, name: file.name, src, kilometers: '', date };
+					return { id: `map-image-${nextImageId++}`, name: file.name, src, kind: 'route' as const, kilometers: '', price: '', date };
 				}),
 			);
 			setMapImages((current) => [...current, ...uploaded]);
@@ -334,7 +335,7 @@ export default function App() {
 							<span>03</span>
 							<div>
 								<h2>Mapa-Cotización</h2>
-								<p>Sube cada imagen e indica los kilómetros y la fecha del recorrido.</p>
+								<p>Sube cada imagen y selecciona Recorrido o Insumos.</p>
 							</div>
 						</div>
 						<label className={`upload-box ${mapImages.length ? 'has-file' : ''}`}>
@@ -348,7 +349,8 @@ export default function App() {
 							</small>
 						</label>
 						<p className="field-note">
-							Si una cotización no incluye recorrido, indica 0 km. Las imágenes de una misma fecha suman su combustible en ese día.
+							Los recorridos suman combustible según sus kilómetros. Los insumos suman su precio en quetzales. Cada gasto se asigna a la
+							fecha de la imagen.
 						</p>
 						{mapImages.length > 0 && (
 							<div className="map-image-list">
@@ -367,20 +369,31 @@ export default function App() {
 											×
 										</button>
 										<div className="map-metadata field-grid">
+											<label className="full-width">
+												<span>Tipo de gasto</span>
+												<select
+													aria-label={`Tipo de gasto de imagen ${index + 1}`}
+													value={image.kind}
+													onChange={(event) => updateMap(image.id, 'kind', event.target.value as TravelImage['kind'])}
+												>
+													<option value="route">Recorrido</option>
+													<option value="supplies">Insumos</option>
+												</select>
+											</label>
 											<label>
-												<span>Kilómetros</span>
+												<span>{image.kind === 'supplies' ? 'Precio (Q)' : 'Kilómetros'}</span>
 												<input
-													aria-label={`Kilómetros de imagen ${index + 1}`}
+													aria-label={`${image.kind === 'supplies' ? 'Precio (Q)' : 'Kilómetros'} de imagen ${index + 1}`}
 													type="number"
 													min="0"
 													step="0.01"
 													placeholder="Ej. 100"
-													value={image.kilometers}
-													onChange={(event) => updateMap(image.id, 'kilometers', event.target.value)}
+													value={image.kind === 'supplies' ? image.price : image.kilometers}
+													onChange={(event) => updateMap(image.id, image.kind === 'supplies' ? 'price' : 'kilometers', event.target.value)}
 												/>
 											</label>
 											<label>
-												<span>Fecha del recorrido</span>
+												<span>{image.kind === 'supplies' ? 'Fecha del gasto' : 'Fecha del recorrido'}</span>
 												<input
 													aria-label={`Fecha de imagen ${index + 1}`}
 													type="date"
@@ -391,16 +404,29 @@ export default function App() {
 												/>
 											</label>
 											<p className="full-width map-fuel">
-												Combustible: <strong>Q{money(imageFuelCost(image))}</strong> · {image.kilometers || '0'} km × Q1.30
+												{image.kind === 'supplies' ? (
+													<>
+														Insumos: <strong>Q{money(toCents(image.price))}</strong>
+													</>
+												) : (
+													<>
+														Combustible: <strong>Q{money(imageFuelCost(image))}</strong> · {image.kilometers || '0'} km × Q1.30
+													</>
+												)}
 											</p>
 											{image.date && !tripDates(form.request).includes(image.date) && (
 												<p className="full-width map-warning">
-													Esta fecha está fuera del viaje. Ajusta la fecha del recorrido o las fechas de salida y regreso.
+													Esta fecha está fuera del viaje. Ajusta la fecha de la imagen o las fechas de salida y regreso.
 												</p>
 											)}
-											{image.kilometers && !validDecimal(image.kilometers) && (
-												<p className="full-width map-warning">Usa kilómetros desde 0, con hasta dos decimales.</p>
-											)}
+											{(image.kind === 'supplies' ? image.price : image.kilometers) &&
+												!validDecimal(image.kind === 'supplies' ? image.price : image.kilometers) && (
+													<p className="full-width map-warning">
+														{image.kind === 'supplies'
+															? 'Usa un precio en quetzales desde 0, con hasta dos decimales.'
+															: 'Usa kilómetros desde 0, con hasta dos decimales.'}
+													</p>
+												)}
 										</div>
 									</div>
 								))}

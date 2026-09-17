@@ -20,6 +20,8 @@ const route = (kilometers = '107', date = '2026-09-03', id = '1'): TravelImage =
 	id,
 	name: `Mapa ${id}`,
 	src: 'data:image/png;base64,test',
+	kind: 'route',
+	price: '',
 	kilometers,
 	date,
 });
@@ -31,7 +33,7 @@ const sample = (changes: Partial<RequestData> = {}): RequestData => ({
 	returnDate: '2026-09-03',
 	images: [route()],
 	meals: { '2026-09-03': { lunch: true, dinner: true } },
-	objective: 'Project Ticket #3497332 - Serie 8357824 AG072CAJA5',
+	clients: ['Banco HT', 'Dollar City', 'Garda'],
 	expenses: { '2026-09-03': { extra1: '30' } },
 	...changes,
 });
@@ -100,6 +102,37 @@ describe('expense calculations', () => {
 		expect(totalsForDates({ ...request, images: [] }).grandTotal).toBe(18000);
 		expect(totalKilometers({ ...request, images: [] })).toBe(0);
 	});
+	it('sums supply images separately from fuel and ignores obsolete manual supply amounts', () => {
+		const supplies: TravelImage[] = ['50', '20'].map((price, index) => ({
+			...route('100', '2026-09-03', String(index)),
+			kind: 'supplies',
+			price,
+		}));
+		const request = sample({ images: supplies, meals: {}, expenses: { '2026-09-03': { extra2: '999' } } });
+		expect(totalsForDates(request).byRow.extra2).toBe(7000);
+		expect(totalsForDates(request).grandTotal).toBe(7000);
+		expect(totalKilometers(request)).toBe(0);
+		expect(kilometerCost(request)).toBe(0);
+		expect(validateRequest(request)).toEqual([]);
+		expect(transferValues({ ...initialForm, request }).amount).toBe('70.00');
+		expect(totalsForDates({ ...request, images: supplies.slice(1) }).grandTotal).toBe(2000);
+		expect(totalsForDates({ ...request, images: [{ ...supplies[0], price: '50.25' }, supplies[1]] }).grandTotal).toBe(7025);
+		const switched = { ...request, images: [{ ...supplies[0], kind: 'route' as const }, supplies[1]] };
+		expect(totalsForDates(switched).byRow.extra2).toBe(2000);
+		expect(totalsForDates(switched).byRow.fuel).toBe(13000);
+		expect(totalKilometers(switched)).toBe(100);
+	});
+	it('allocates supply prices by date and validates prices independently of kilometers', () => {
+		const supply: TravelImage = { ...route('', '2026-09-04'), kind: 'supplies', price: '20.15' };
+		const request = sample({ images: [route('10'), supply], meals: {}, expenses: {}, returnDate: '2026-09-04' });
+		expect(totalsForDates(request).byDate).toEqual({ '2026-09-03': 1300, '2026-09-04': 2015 });
+		expect(validateRequest(request)).toEqual([]);
+		for (const price of ['', '-1', '1.234', 'NaN']) {
+			expect(validateRequest({ ...request, images: [{ ...supply, price }] }).some((error) => error.includes('precio válido'))).toBe(true);
+		}
+		expect(totalsForDates({ ...request, returnDate: '2026-09-03' }).grandTotal).toBe(1300);
+		expect(validateRequest({ ...request, returnDate: '2026-09-03' })).toContain('Imagen 2: selecciona una fecha dentro del viaje.');
+	});
 	it('uses fixed meal rates per day and zero for No', () => {
 		const request = sample({
 			returnDate: '2026-09-04',
@@ -117,7 +150,7 @@ describe('expense calculations', () => {
 		const request = sample({
 			images: [route('0.05'), route('0.05', '2026-09-03', '2')],
 			meals: {},
-			expenses: { '2026-09-03': { extra1: '0.10', extra2: '0.20' } },
+			expenses: { '2026-09-03': { extra1: '0.10', lodging: '0.20' } },
 		});
 		expect(totalKilometers(request)).toBe(0.1);
 		expect(kilometerCost(request)).toBe(14);
@@ -142,7 +175,7 @@ describe('expense calculations', () => {
 			expect(validateRequest(sample({ expenses: { '2026-09-03': { lodging: value } } })).length).toBeGreaterThan(0);
 		}
 	});
-	it('uses the same name, objective, date and calculated total in Transferencia', () => {
+	it('uses the same name, date and calculated total in Transferencia', () => {
 		const form: RequestForm = {
 			...initialForm,
 			person: { name: 'María López', signature: 'data:image/png;base64,test' },
@@ -152,7 +185,6 @@ describe('expense calculations', () => {
 		expect([values.beneficiary, values.accountHolder, values.requestedBy, values.preparedBy]).toEqual(Array(4).fill('María López'));
 		expect(values.signature).toBe(form.person.signature);
 		expect(values.amount).toBe('319.10');
-		expect(values.objective).toBe(form.request.objective);
 		expect(values.date).toBe('martes, 1 de septiembre de 2026');
 		expect(transferValues({ ...form, request: { ...form.request, images: [route('200')] } }).amount).toBe('440.00');
 	});

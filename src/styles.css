@@ -49,7 +49,7 @@ button {
 	align-items: center;
 	justify-content: space-between;
 	gap: 20px;
-	padding: 16px clamp(20px, 3.5vw, 54px);
+	padding: 10px clamp(20px, 3.5vw, 54px);
 	color: #fff;
 	background: linear-gradient(110deg, #07377f 0%, #064cad 72%, #0757c1 100%);
 	box-shadow: 0 12px 34px rgba(4, 38, 87, 0.18);
@@ -65,8 +65,8 @@ button {
 .logo-tile {
 	display: grid;
 	place-items: center;
-	width: 90px;
-	height: 43px;
+	width: 80px;
+	height: 38px;
 	padding: 6px 9px;
 	border-radius: 9px;
 	background: #fff;
@@ -89,7 +89,7 @@ h2 {
 	margin: 0;
 }
 h1 {
-	font-size: clamp(20px, 2vw, 27px);
+	font-size: clamp(19px, 1.8vw, 24px);
 	line-height: 1.1;
 	letter-spacing: -0.03em;
 }
@@ -908,4 +908,74 @@ button:disabled {
 	.meal-switch::before {
 		transition: none;
 	}
+}
+
+.client-picker {
+	display: grid;
+	gap: 8px;
+	min-width: 0;
+}
+.client-label {
+	color: #3a4a5f;
+	font-size: 14px;
+	font-weight: 700;
+}
+.client-picker summary {
+	padding: 12px 14px;
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	background: #fff;
+	color: var(--blue);
+	cursor: pointer;
+	font-size: 14px;
+	font-weight: 650;
+}
+.client-picker summary:focus-visible {
+	outline: 3px solid #8ab8f7;
+	outline-offset: 2px;
+}
+.client-dropdown {
+	display: grid;
+	gap: 10px;
+	margin-top: 8px;
+	padding: 14px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: #fff;
+}
+.client-options {
+	max-height: 240px;
+	overflow-y: auto;
+}
+.client-options label {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 8px;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 13px;
+	font-weight: 500;
+}
+.client-options label:hover,
+.client-options label:has(input:checked) {
+	background: #edf4ff;
+}
+.client-options input {
+	width: 17px;
+	height: 17px;
+	flex: 0 0 17px;
+	margin: 0;
+	accent-color: var(--blue);
+}
+.client-options p,
+.client-picker small {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.5;
+}
+.client-picker .tag {
+	max-width: 100%;
+	white-space: normal;
+	overflow-wrap: anywhere;
 }

@@ -1,6 +1,8 @@
+import { ClientPicker } from './ClientPicker';
 import { useId, useState, type Dispatch, type SetStateAction } from 'react';
 import {
 	EXTRA_IDS,
+	SUPPLIES_ID,
 	expenseCents,
 	expenseRows,
 	formatDate,
@@ -143,7 +145,7 @@ export function RequestFields({ form, setForm }: { form: RequestForm; setForm: D
 					label="Destinos"
 					values={request.destinations}
 					onChange={(values) => update('destinations', values)}
-					placeholder="Ej. Banco G&T Continental"
+					placeholder="Ej. Chimaltenango, Suchitepéquez, Escuintla"
 				/>
 				<label>
 					<span>Cantidad de KMS totales</span>
@@ -175,27 +177,15 @@ export function RequestFields({ form, setForm }: { form: RequestForm; setForm: D
 						placeholder="Ej. Mantenimientos programados GyT - Chimaltenango"
 					/>
 				</label>
-				<label className="full-width">
-					<span>
-						Detalle del objetivo / nombre completo del ticket <em>*</em>
-					</span>
-					<textarea
-						rows={3}
-						maxLength={220}
-						value={request.objective}
-						onChange={(event) => update('objective', event.target.value)}
-						placeholder="Project Ticket #… - Serie…"
-					/>
-					<small>Se repite debajo de Objetivo en Transferencia.</small>
-				</label>
+				<ClientPicker values={request.clients} onChange={(values) => update('clients', values)} />
 			</div>
 			<div className="expense-section">
 				<h3>Gastos por día</h3>
 				<p className="field-note">
-					Marca las comidas de cada día: desayuno Q50, almuerzo Q75 y cena Q75. Hospedaje y los cuatro gastos extra se ingresan manualmente.
+					Marca las comidas de cada día: desayuno Q50, almuerzo Q75 y cena Q75. Hospedaje y los demás gastos extra se ingresan manualmente.
 				</p>
 				<p className="field-note">
-					El combustible se calcula con las imágenes de Mapa-Cotización y se asigna a la fecha de cada recorrido.
+					El combustible y los insumos se calculan con las imágenes de Mapa-Cotización y se asignan a la fecha de cada imagen.
 				</p>
 				{dates.length > 0 ? (
 					<>
@@ -213,14 +203,14 @@ export function RequestFields({ form, setForm }: { form: RequestForm; setForm: D
 							<span className="expense-column-heading">Clasificación de gastos</span>
 							<span className="expense-column-heading">Monto (GTQ)</span>
 							{rows.map((row, index) => {
-								const automatic = row.id === 'fuel';
+								const automatic = row.id === 'fuel' || row.id === SUPPLIES_ID;
 								const meal = isMeal(row.id) ? row.id : null;
 								const value = automatic
 									? (expenseCents(request, activeDate, row.id) / 100).toFixed(2)
 									: (request.expenses[activeDate]?.[row.id] ?? '');
 								return (
 									<div className="expense-input-row" key={row.id}>
-										{index < 5 ? (
+										{index < 5 || row.id === SUPPLIES_ID ? (
 											<span>{row.label}</span>
 										) : (
 											<input
@@ -246,6 +236,9 @@ export function RequestFields({ form, setForm }: { form: RequestForm; setForm: D
 													checked={Boolean(request.meals[activeDate]?.[meal])}
 													onChange={(event) => {
 														const enabled = event.target.checked;
+														if (meal === 'breakfast' && enabled) {
+															window.alert('El desayuno solo aplica antes de las 7 de la mañana y 30 kilómetros fuera de la bodega.');
+														}
 														setForm((current) => ({
 															...current,
 															request: {

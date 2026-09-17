@@ -13,7 +13,16 @@ export type MealId = keyof typeof MEAL_RATES;
 export function isMeal(id: ExpenseId): id is MealId {
 	return id === 'breakfast' || id === 'lunch' || id === 'dinner';
 }
-export type TravelImage = { id: string; name: string; src: string; kilometers: string; date: string };
+export type TravelImage = {
+	id: string;
+	name: string;
+	src: string;
+	kind: 'route' | 'supplies';
+	kilometers: string;
+	price: string;
+	date: string;
+};
+export const SUPPLIES_ID = 'extra2';
 export const KM_RATE_CENTS = 130;
 export const COLUMNS_PER_PAGE = 12;
 export const MAX_TRAVEL_DAYS = 366;
@@ -23,7 +32,7 @@ export type RequestData = {
 	departureDate: string;
 	returnDate: string;
 	concept: string;
-	objective: string;
+	clients: string[];
 	destinations: string[];
 	serviceTickets: string[];
 	projectTickets: string[];
@@ -48,7 +57,7 @@ export const initialForm: RequestForm = {
 		departureDate: '',
 		returnDate: '',
 		concept: '',
-		objective: '',
+		clients: [],
 		destinations: [],
 		serviceTickets: [],
 		projectTickets: [],
@@ -106,10 +115,11 @@ export function money(cents: number) {
 	return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(cents / 100);
 }
 export function imageFuelCost(image: TravelImage) {
+	if (image.kind === 'supplies') return 0;
 	return Math.round((toCents(image.kilometers) * KM_RATE_CENTS) / 100);
 }
 export function totalKilometers(request: RequestData) {
-	return request.images.reduce((sum, image) => sum + toCents(image.kilometers), 0) / 100;
+	return request.images.reduce((sum, image) => sum + (image.kind === 'supplies' ? 0 : toCents(image.kilometers)), 0) / 100;
 }
 export function kilometerCost(request: RequestData) {
 	return request.images.reduce((sum, image) => sum + imageFuelCost(image), 0);
@@ -117,10 +127,14 @@ export function kilometerCost(request: RequestData) {
 export function expenseCents(request: RequestData, date: string, id: ExpenseId) {
 	if (isMeal(id)) return request.meals[date]?.[id] ? MEAL_RATES[id] : 0;
 	if (id === 'fuel') return request.images.filter((image) => image.date === date).reduce((sum, image) => sum + imageFuelCost(image), 0);
+	if (id === SUPPLIES_ID)
+		return request.images
+			.filter((image) => image.date === date && image.kind === 'supplies')
+			.reduce((sum, image) => sum + toCents(image.price), 0);
 	return toCents(request.expenses[date]?.[id] ?? '');
 }
 export function expenseRows(request: RequestData) {
-	return [...FIXED_EXPENSES, ...EXTRA_IDS.map((id) => ({ id, label: request.extraLabels[id] }))];
+	return [...FIXED_EXPENSES, ...EXTRA_IDS.map((id) => ({ id, label: id === SUPPLIES_ID ? 'Insumos' : request.extraLabels[id] }))];
 }
 export function totalsForDates(request: RequestData, dates = tripDates(request)) {
 	const byRow = Object.fromEntries(EXPENSE_IDS.map((id) => [id, 0])) as Record<ExpenseId, number>;
@@ -158,15 +172,17 @@ export function validateRequest(request: RequestData) {
 	if (!formatDate(request.date)) errors.push('Ingresa una fecha de solicitud válida.');
 	if (!travelDays(request)) errors.push('Revisa las fechas de salida y regreso: el regreso no puede ser anterior a la salida.');
 	if (travelDays(request) > MAX_TRAVEL_DAYS) errors.push(`El viaje puede abarcar hasta ${MAX_TRAVEL_DAYS} días.`);
-	if (!request.objective.trim()) errors.push('Ingresa el detalle del objetivo / nombre completo del ticket.');
 
 	const dates = tripDates(request);
 	for (const [index, image] of request.images.entries()) {
-		if (!validDecimal(image.kilometers))
+		if (image.kind === 'supplies') {
+			if (!validDecimal(image.price)) errors.push(`Imagen ${index + 1}: ingresa un precio válido en quetzales, con hasta dos decimales.`);
+		} else if (!validDecimal(image.kilometers))
 			errors.push(`Imagen ${index + 1}: ingresa kilómetros válidos (0 si no hay recorrido), con hasta dos decimales.`);
 		if (!dates.includes(image.date)) errors.push(`Imagen ${index + 1}: selecciona una fecha dentro del viaje.`);
 	}
 	for (const row of expenseRows(request)) {
+		if (row.id === SUPPLIES_ID) continue;
 		const manualValues = dates.map((date) => request.expenses[date]?.[row.id] ?? '');
 		if (row.id !== 'fuel' && !isMeal(row.id) && manualValues.some((value) => value !== '' && !validDecimal(value))) {
 			errors.push(`Revisa ${row.label || 'el gasto extra'}: usa montos positivos con hasta dos decimales.`);
@@ -188,6 +204,5 @@ export function transferValues(form: RequestForm) {
 		date: formatDate(form.request.date, true),
 		amount: total > 0 ? money(total) : '',
 		concept: form.request.concept,
-		objective: form.request.objective,
 	};
 }
