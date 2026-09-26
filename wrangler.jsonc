@@ -6,6 +6,25 @@
 	"compatibility_flags": ["nodejs_compat"],
 	"assets": {
 		"not_found_handling": "single-page-application",
+		"run_worker_first": ["/api/*"],
+	},
+	"d1_databases": [
+		{
+			"binding": "ACCOUNTS_DB",
+			"database_name": "proyecto-viaticos-accounts",
+			"database_id": "c187f79c-3fc9-493c-948a-bf2bb3743c9e",
+			"migrations_dir": "migrations",
+		},
+	],
+	"vars": {
+		"ACCESS_TEAM_DOMAIN": "icy-silence-7f17.cloudflareaccess.com",
+		"ACCESS_AUD": "7f73b49b2300fe2e5fea0ada93e6c448a517f540566ec6c982cf4d64b693a453",
+	},
+	"access": {
+		"dev": {
+			"aud": "local-dev",
+			"identity": { "email": "dev@example.invalid" },
+		},
 	},
 	"observability": {
 		"enabled": true,
