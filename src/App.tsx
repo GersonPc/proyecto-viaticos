@@ -37,24 +37,41 @@ type AccountProfile = {
 	account: { number: string; type: string; bank: string } | null;
 };
 
-function createInitialForm(profile?: AccountProfile): RequestForm {
+function createInitialForm(profile?: AccountProfile, signature = ''): RequestForm {
 	const today = new Date();
 	const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 	return {
 		...initialForm,
-		person: { ...initialForm.person, name: profile?.name ?? '' },
+		person: { ...initialForm.person, name: profile?.name ?? '', signature },
 		account: profile?.account ?? { number: '', type: '', bank: '' },
 		request: { ...initialForm.request, date },
 	};
 }
 
-const fileToDataUrl = (file: File) =>
+const fileToDataUrl = (file: Blob) =>
 	new Promise<string>((resolve, reject) => {
 		const reader = new FileReader();
 		reader.onload = () => resolve(String(reader.result));
 		reader.onerror = () => reject(reader.error);
 		reader.readAsDataURL(file);
 	});
+
+async function prepareStoredSignature(file: File, src: string): Promise<Blob> {
+	if (file.size <= 1_500_000) return file;
+	const image = new Image();
+	image.src = src;
+	await image.decode();
+	for (const maxDimension of [1200, 900, 600, 400]) {
+		const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
+		const canvas = document.createElement('canvas');
+		canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+		canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+		canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
+		const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/webp', 0.85));
+		if (blob?.type === 'image/webp' && blob.size <= 1_500_000) return blob;
+	}
+	throw new Error('No se pudo reducir la firma para guardarla. Selecciona una imagen más pequeña.');
+}
 
 function MapPage({ images, pageNumber }: { images: TravelImage[]; pageNumber: number }) {
 	return (
@@ -85,6 +102,10 @@ export default function App() {
 	const [form, setForm] = useState<RequestForm>(createInitialForm);
 	const [profile, setProfile] = useState<AccountProfile | null>(null);
 	const [profileError, setProfileError] = useState('');
+	const [savedSignature, setSavedSignature] = useState<string | null>(null);
+	const [pendingSignature, setPendingSignature] = useState<{ file: File; src: string } | null>(null);
+	const [signatureBusy, setSignatureBusy] = useState(false);
+	const [signatureNotice, setSignatureNotice] = useState('');
 	const mapImages = form.request.images;
 	const setMapImages = (update: (images: TravelImage[]) => TravelImage[]) =>
 		setForm((current) => ({ ...current, request: { ...current.request, images: update(current.request.images) } }));
@@ -113,8 +134,27 @@ export default function App() {
 				) {
 					throw new Error('El registro de tu cuenta está incompleto. Contacta al administrador.');
 				}
+				let storedSignature = '';
+				try {
+					const signatureResponse = await fetch('/api/signature', {
+						cache: 'no-store',
+						credentials: 'same-origin',
+						signal: controller.signal,
+					});
+					if (signatureResponse.ok && signatureResponse.status === 200) {
+						storedSignature = await fileToDataUrl(await signatureResponse.blob());
+					} else if (signatureResponse.status !== 204) {
+						throw new Error('No se pudo cargar tu firma guardada. Puedes intentar de nuevo al recargar la página.');
+					}
+				} catch {
+					if (!controller.signal.aborted) {
+						setSignatureNotice('No se pudo cargar tu firma guardada. Puedes intentar de nuevo al recargar la página.');
+					}
+				}
+				if (controller.signal.aborted) return;
+				setSavedSignature(storedSignature || null);
 				setProfile(data);
-				setForm(createInitialForm(data));
+				setForm(createInitialForm(data, storedSignature));
 			})
 			.catch((error: unknown) => {
 				if (!controller.signal.aborted) setProfileError(error instanceof Error ? error.message : 'No se pudo cargar tu cuenta.');
@@ -180,9 +220,55 @@ export default function App() {
 			image.src = src;
 			await image.decode();
 			setForm((current) => ({ ...current, person: { ...current.person, signature: src } }));
+			setPendingSignature({ file, src });
+			setSignatureNotice('');
 			setErrors([]);
 		} catch {
 			setErrors(['No se pudo abrir la imagen de la firma. Selecciona otro archivo.']);
+		}
+	};
+
+	const saveSignature = async () => {
+		if (!pendingSignature || signatureBusy) return;
+		setSignatureBusy(true);
+		try {
+			const storedFile = await prepareStoredSignature(pendingSignature.file, pendingSignature.src);
+			const response = await fetch('/api/signature', {
+				method: 'PUT',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': storedFile.type },
+				body: storedFile,
+			});
+			if (!response.ok) {
+				const body = (await response.json().catch(() => ({}))) as { error?: string };
+				throw new Error(body.error || 'No se pudo guardar la firma.');
+			}
+			setSavedSignature(await fileToDataUrl(storedFile));
+			setPendingSignature(null);
+			setSignatureNotice('Tu firma quedó guardada y se utilizará automáticamente en próximas solicitudes.');
+		} catch (error) {
+			setSignatureNotice(error instanceof Error ? error.message : 'No se pudo guardar la firma.');
+		} finally {
+			setSignatureBusy(false);
+		}
+	};
+
+	const deleteSavedSignature = async () => {
+		if (!savedSignature || signatureBusy) return;
+		if (!window.confirm('¿Eliminar tu firma guardada? También se quitará de esta solicitud si está en uso.')) return;
+		setSignatureBusy(true);
+		try {
+			const response = await fetch('/api/signature', { method: 'DELETE', credentials: 'same-origin' });
+			if (!response.ok) throw new Error('No se pudo eliminar la firma guardada. Intenta de nuevo.');
+			setForm((current) =>
+				current.person.signature === savedSignature ? { ...current, person: { ...current.person, signature: '' } } : current,
+			);
+			setSavedSignature(null);
+			setSignatureNotice('Tu firma guardada se eliminó.');
+		} catch (error) {
+			setSignatureNotice(error instanceof Error ? error.message : 'No se pudo eliminar la firma guardada.');
+		} finally {
+			setSignatureBusy(false);
 		}
 	};
 
@@ -210,7 +296,9 @@ export default function App() {
 
 	const resetForm = () => {
 		if (!window.confirm('¿Deseas borrar los datos de esta solicitud?')) return;
-		setForm(createInitialForm(profile ?? undefined));
+		setForm(createInitialForm(profile ?? undefined, savedSignature ?? ''));
+		setPendingSignature(null);
+		setSignatureNotice('');
 		setErrors([]);
 	};
 
@@ -370,19 +458,75 @@ export default function App() {
 							</p>
 							<label className="full-width">
 								<span>Firma del beneficiario / Elaborado por</span>
-								<input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleSignature} />
-								<small>La misma firma se utiliza en ambas hojas. PNG, JPG o WebP, hasta 5 MB.</small>
+								<input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleSignature} disabled={signatureBusy} />
+								<small>
+									La misma firma se utiliza en ambas hojas. PNG, JPG o WebP, hasta 5 MB. Puedes usarla solo ahora o guardarla para futuras
+									solicitudes.
+								</small>
 							</label>
+							{pendingSignature && (
+								<div className="signature-save-prompt full-width" role="group" aria-label="Decidir si guardar la firma">
+									<strong>
+										{savedSignature
+											? '¿Deseas reemplazar tu firma guardada con esta imagen?'
+											: '¿Deseas guardar tu firma en la aplicación para próximas solicitudes?'}
+									</strong>
+									<p>Solo tu cuenta podrá recuperarla. Si prefieres, la imagen se usará únicamente en esta solicitud.</p>
+									<div className="signature-actions">
+										<button type="button" className="primary-button" onClick={() => void saveSignature()} disabled={signatureBusy}>
+											{signatureBusy ? 'Guardando…' : savedSignature ? 'Reemplazar firma guardada' : 'Guardar para próximas solicitudes'}
+										</button>
+										<button
+											type="button"
+											className="secondary-button"
+											onClick={() => {
+												setPendingSignature(null);
+												setSignatureNotice('Esta firma se usará solo en la solicitud actual.');
+											}}
+											disabled={signatureBusy}
+										>
+											Solo esta solicitud
+										</button>
+									</div>
+								</div>
+							)}
+							{signatureNotice && (
+								<p className="signature-notice full-width" role="status">
+									{signatureNotice}
+								</p>
+							)}
 							{form.person.signature && (
 								<div className="signature-preview full-width">
 									<img src={form.person.signature} alt={`Firma de ${form.person.name || 'la persona beneficiaria'}`} />
 									<button
 										type="button"
 										className="secondary-button"
-										onClick={() => setForm((current) => ({ ...current, person: { ...current.person, signature: '' } }))}
+										onClick={() => {
+											setForm((current) => ({ ...current, person: { ...current.person, signature: '' } }));
+											setPendingSignature(null);
+										}}
 									>
-										Quitar firma
+										Quitar de esta solicitud
 									</button>
+								</div>
+							)}
+							{savedSignature && (
+								<div className="signature-saved-controls full-width">
+									<span>Tu firma personal está guardada para próximas solicitudes.</span>
+									<div className="signature-actions">
+										{!form.person.signature && (
+											<button
+												type="button"
+												className="secondary-button"
+												onClick={() => setForm((current) => ({ ...current, person: { ...current.person, signature: savedSignature } }))}
+											>
+												Usar firma guardada
+											</button>
+										)}
+										<button type="button" className="secondary-button" onClick={() => void deleteSavedSignature()} disabled={signatureBusy}>
+											Eliminar firma guardada
+										</button>
+									</div>
 								</div>
 							)}
 						</div>

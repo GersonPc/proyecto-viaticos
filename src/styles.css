@@ -492,12 +492,34 @@ textarea {
 	display: flex;
 	align-items: center;
 	gap: 16px;
+	flex-wrap: wrap;
 }
 .signature-preview img {
 	width: 130px;
 	height: 65px;
 	object-fit: contain;
 	background: #fff;
+}
+.signature-save-prompt,
+.signature-saved-controls {
+	display: grid;
+	gap: 10px;
+	padding: 15px;
+	border: 1px solid #dcdcdc;
+	border-radius: 10px;
+	background: #fff;
+}
+.signature-save-prompt p,
+.signature-saved-controls span,
+.signature-notice {
+	margin: 0;
+	font-size: 13px;
+	line-height: 1.5;
+}
+.signature-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 9px;
 }
 .request-sheet {
 	padding: 0;

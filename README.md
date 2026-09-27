@@ -51,6 +51,12 @@ Para actualizar el listado más adelante, con el CSV fuera del repositorio, ejec
 
 El CSV y el SQL generado contienen datos bancarios: guárdalos fuera de Git y no compartas sus contenidos en registros o capturas. Para desarrollo local, `access.dev` simula `dev@example.invalid`; utiliza únicamente registros de prueba en la D1 local.
 
+## Firma personal guardada
+
+Al seleccionar una firma por primera vez, la persona decide si desea guardarla para próximas solicitudes o usarla solo en la solicitud actual. La firma guardada se carga automáticamente al abrir la aplicación. Se puede quitar de la solicitud actual, reemplazar o eliminar de forma permanente desde el formulario. La firma se consulta y modifica solo mediante el correo verificado por Cloudflare Access y únicamente si ese correo figura en el directorio D1.
+
+Las firmas se almacenan en una tabla separada de la misma D1 privada, mediante la migración `0002_signatures.sql`. Cada imagen se limita a 1,5 MB en D1; si el archivo original supera ese tamaño, el navegador intenta reducirlo antes de guardarlo. La firma no se incluye en Git ni se expone como archivo público. Antes de publicar esta versión, ejecuta `pnpm exec wrangler d1 migrations apply proyecto-viaticos-accounts --remote`.
+
 ## Colaboración en GitHub
 
 Trabaja en una rama independiente y abre un pull request:
@@ -68,7 +74,7 @@ Consulta [CONTRIBUTING.md](./CONTRIBUTING.md) para el acuerdo de trabajo. No agr
 
 Las páginas de transferencia y solicitud reproducen los formatos de referencia en carta vertical (612 × 792 puntos) y horizontal (792 × 612 puntos), respectivamente. Los encabezados, líneas, logo, fuentes y datos administrativos fijos se conservan en `public/transfer-template.svg` y `public/request-template.svg`.
 
-- El nombre se obtiene del correo verificado y alimenta los campos de la misma persona en ambos documentos. La firma es una imagen opcional compartida.
+- El nombre se obtiene del correo verificado y alimenta los campos de la misma persona en ambos documentos. La firma es una imagen opcional compartida entre ambas hojas; cada usuario decide si la conserva para próximas solicitudes.
 - El número de cuenta, tipo y banco provienen de D1 y se muestran como solo lectura. La persona sin cuenta registrada puede ingresarlos para su solicitud actual. El cargo permanece como Microsistemas.
 - La fecha de solicitud, el objetivo específico y el detalle del ticket se capturan en Solicitud y se reutilizan en Transferencia.
 - Las fechas de salida y regreso son independientes de la fecha de solicitud. Los días se calculan incluyendo ambos extremos.
@@ -79,7 +85,7 @@ Las páginas de transferencia y solicitud reproducen los formatos de referencia 
 - Los gastos fuera del rango de fechas se conservan en el borrador, pero se excluyen del total. Los viajes largos usan hojas de continuación de 12 columnas; se admiten hasta 366 días.
 - Se mantienen las páginas de mapas y cotizaciones, con tres imágenes por página.
 
-Los datos viven en la memoria de la página y se borran al recargar. La firma del PDF de referencia y sus datos de ejemplo no se incorporan a la plantilla. Los revisores y datos administrativos del formato permanecen fijos.
+Los datos de cada solicitud viven en la memoria de la página y se borran al recargar. La firma solo persiste cuando la persona acepta guardarla. La firma del PDF de referencia y sus datos de ejemplo no se incorporan a la plantilla. Los revisores y datos administrativos del formato permanecen fijos.
 
 Para exportar, pulsa **Generar PDF** y elige **Guardar como PDF**, escala 100 %, sin márgenes ni encabezados/pies del navegador. La exportación usa carta vertical para transferencia y mapas, y carta horizontal para solicitud.
 

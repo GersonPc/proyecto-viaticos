@@ -24,6 +24,42 @@ const environment = (row: Record<string, string | null> | null = null) => {
 	return { env, getLookedUpEmail: () => lookedUpEmail };
 };
 
+const signatureEnvironment = () => {
+	const objects = new Map<string, { image: number[]; content_type: string }>();
+	const write = vi.fn(async (sql: string, params: unknown[]) => {
+		if (sql.startsWith('DELETE')) objects.delete(params[0] as string);
+		if (sql.startsWith('INSERT'))
+			objects.set(params[0] as string, { content_type: params[1] as string, image: [...(params[2] as Uint8Array)] });
+	});
+	const env = {
+		ACCOUNTS_DB: {
+			prepare: (sql: string) => ({
+				bind: (...params: unknown[]) => ({
+					first: async () =>
+						sql.startsWith('SELECT 1')
+							? params[0] === 'owner@example.com'
+								? { allowed: 1 }
+								: null
+							: (objects.get(params[0] as string) ?? null),
+					run: () => write(sql, params),
+				}),
+			}),
+		},
+	} as unknown as Env;
+	return { env, write, objects };
+};
+
+const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
+const signatureRequest = (method: string, body?: Uint8Array, origin = 'https://example.com') => {
+	const buffer = body ? new ArrayBuffer(body.byteLength) : undefined;
+	if (buffer && body) new Uint8Array(buffer).set(body);
+	return new Request('https://example.com/api/signature?email=other@example.com', {
+		method,
+		headers: { Origin: origin, 'Content-Type': 'image/png' },
+		body: buffer,
+	});
+};
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe('account directory worker', () => {
@@ -125,5 +161,39 @@ describe('account directory worker', () => {
 		);
 		expect(forged.status).toBe(401);
 		expect(fetchKeys).toHaveBeenCalledTimes(1);
+	});
+
+	it('guarda, recupera y elimina solo la firma del correo verificado', async () => {
+		const { env, write, objects } = signatureEnvironment();
+		const saved = await handleRequest(signatureRequest('PUT', png), env, context('owner@example.com'));
+		expect(saved.status).toBe(200);
+		expect(objects.size).toBe(1);
+		expect([...objects.keys()][0]).not.toContain('owner@example.com');
+		const loaded = await handleRequest(signatureRequest('GET'), env, context('owner@example.com'));
+		expect(loaded.status).toBe(200);
+		expect(loaded.headers.get('Content-Type')).toBe('image/png');
+		expect(loaded.headers.get('Cache-Control')).toBe('no-store');
+		expect(new Uint8Array(await loaded.arrayBuffer())).toEqual(png);
+		const removed = await handleRequest(signatureRequest('DELETE'), env, context('owner@example.com'));
+		expect(removed.status).toBe(204);
+		expect(write).toHaveBeenCalledTimes(2);
+		expect((await handleRequest(signatureRequest('GET'), env, context('owner@example.com'))).status).toBe(204);
+	});
+
+	it('rechaza firmas de personas sin sesión o ausentes del directorio', async () => {
+		const { env, write } = signatureEnvironment();
+		expect((await handleRequest(signatureRequest('PUT', png), env, context())).status).toBe(401);
+		expect((await handleRequest(signatureRequest('PUT', png), env, context('other@example.com'))).status).toBe(404);
+		expect(write).not.toHaveBeenCalled();
+	});
+
+	it('rechaza origen ajeno, archivo falso y firma demasiado grande', async () => {
+		const { env, write } = signatureEnvironment();
+		expect((await handleRequest(signatureRequest('PUT', png, 'https://other.example.com'), env, context('owner@example.com'))).status).toBe(
+			403,
+		);
+		expect((await handleRequest(signatureRequest('PUT', new Uint8Array([1, 2, 3])), env, context('owner@example.com'))).status).toBe(415);
+		expect((await handleRequest(signatureRequest('PUT', new Uint8Array(1_500_001)), env, context('owner@example.com'))).status).toBe(413);
+		expect(write).not.toHaveBeenCalled();
 	});
 });
