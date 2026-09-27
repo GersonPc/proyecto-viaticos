@@ -38,6 +38,19 @@ Cloudflare Workers Builds está conectado a `GersonPc/proyecto-viaticos` con `ma
 
 Configuración: directorio raíz `/`, compilación `npm run build` y despliegue `npx wrangler deploy`. El estado y los registros se consultan en Cloudflare → proyecto-viaticos → Implementaciones → Builds recientes. Si una compilación falla, producción conserva la última versión publicada correctamente.
 
+## Directorio privado de cuentas
+
+La cuenta se busca por el correo verificado de Cloudflare Access. La aplicación nunca descarga el listado completo. El nombre y los datos bancarios registrados se muestran como solo lectura. Un registro sin cuenta permite ingresar banco, tipo y número únicamente para la solicitud actual; esos datos no se guardan en D1.
+
+La base D1 `proyecto-viaticos-accounts` ya está creada, enlazada en `wrangler.jsonc` y contiene 24 colaboradores, uno sin cuenta. Cloudflare Access protege el Worker en producción y vistas previas con una regla que permite direcciones verificadas de `@tecnasa.com` y sesiones de 24 horas. One-time PIN está disponible para iniciar sesión. La etiqueta AUD y el dominio del equipo están configurados en `wrangler.jsonc`. Antes de publicar esta integración:
+
+1. Ejecuta `pnpm cf-typegen`, `pnpm check` y `pnpm build`.
+2. Comprueba el acceso con un correo con cuenta, el correo sin cuenta y un correo ausente del listado antes de fusionar la rama en `main`. Un correo permitido por Access que no esté en D1 no puede consultar cuentas.
+
+Para actualizar el listado más adelante, con el CSV fuera del repositorio, ejecuta `python3 scripts/prepare-account-import.py /ruta/listado.csv --output /private/tmp/account-import.sql`. El script valida correos duplicados y cuentas incompletas. Luego ejecuta `pnpm exec wrangler d1 execute ACCOUNTS_DB --remote --file /private/tmp/account-import.sql` y elimina el SQL temporal. La importación reemplaza el directorio anterior completo.
+
+El CSV y el SQL generado contienen datos bancarios: guárdalos fuera de Git y no compartas sus contenidos en registros o capturas. Para desarrollo local, `access.dev` simula `dev@example.invalid`; utiliza únicamente registros de prueba en la D1 local.
+
 ## Colaboración en GitHub
 
 Trabaja en una rama independiente y abre un pull request:
@@ -55,8 +68,8 @@ Consulta [CONTRIBUTING.md](./CONTRIBUTING.md) para el acuerdo de trabajo. No agr
 
 Las páginas de transferencia y solicitud reproducen los formatos de referencia en carta vertical (612 × 792 puntos) y horizontal (792 × 612 puntos), respectivamente. Los encabezados, líneas, logo, fuentes y datos administrativos fijos se conservan en `public/transfer-template.svg` y `public/request-template.svg`.
 
-- El nombre se captura una sola vez y alimenta los campos de la misma persona en ambos documentos. La firma es una imagen opcional compartida.
-- El número de cuenta, tipo y banco son editables en Transferencia. El cargo permanece como Microsistemas.
+- El nombre se obtiene del correo verificado y alimenta los campos de la misma persona en ambos documentos. La firma es una imagen opcional compartida.
+- El número de cuenta, tipo y banco provienen de D1 y se muestran como solo lectura. La persona sin cuenta registrada puede ingresarlos para su solicitud actual. El cargo permanece como Microsistemas.
 - La fecha de solicitud, el objetivo específico y el detalle del ticket se capturan en Solicitud y se reutilizan en Transferencia.
 - Las fechas de salida y regreso son independientes de la fecha de solicitud. Los días se calculan incluyendo ambos extremos.
 - Destinos, Service Tickets y tickets de proyecto son listas independientes de etiquetas. En el PDF se separan con comas.

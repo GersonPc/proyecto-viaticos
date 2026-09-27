@@ -32,10 +32,20 @@ type ModelContext = {
 const IMAGES_PER_MAP_PAGE = 3;
 let nextImageId = 1;
 
-function createInitialForm(): RequestForm {
+type AccountProfile = {
+	name: string;
+	account: { number: string; type: string; bank: string } | null;
+};
+
+function createInitialForm(profile?: AccountProfile): RequestForm {
 	const today = new Date();
 	const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-	return { ...initialForm, request: { ...initialForm.request, date } };
+	return {
+		...initialForm,
+		person: { ...initialForm.person, name: profile?.name ?? '' },
+		account: profile?.account ?? { number: '', type: '', bank: '' },
+		request: { ...initialForm.request, date },
+	};
 }
 
 const fileToDataUrl = (file: File) =>
@@ -73,6 +83,8 @@ function MapPages({ images }: { images: TravelImage[] }) {
 
 export default function App() {
 	const [form, setForm] = useState<RequestForm>(createInitialForm);
+	const [profile, setProfile] = useState<AccountProfile | null>(null);
+	const [profileError, setProfileError] = useState('');
 	const mapImages = form.request.images;
 	const setMapImages = (update: (images: TravelImage[]) => TravelImage[]) =>
 		setForm((current) => ({ ...current, request: { ...current.request, images: update(current.request.images) } }));
@@ -82,10 +94,33 @@ export default function App() {
 	const [preparingPrint, setPreparingPrint] = useState(false);
 	const mapPageCount = Math.ceil(mapImages.length / IMAGES_PER_MAP_PAGE);
 
-	const updatePerson = (key: keyof RequestForm['person'], value: string) =>
-		setForm((current) => ({ ...current, person: { ...current.person, [key]: value } }));
 	const updateAccount = (key: keyof RequestForm['account'], value: string) =>
-		setForm((current) => ({ ...current, account: { ...current.account, [key]: value } }));
+		setForm((current) => (profile?.account ? current : { ...current, account: { ...current.account, [key]: value } }));
+
+	useEffect(() => {
+		const controller = new AbortController();
+		void fetch('/api/me', { cache: 'no-store', credentials: 'same-origin', signal: controller.signal })
+			.then(async (response) => {
+				if (!response.ok) {
+					const body = (await response.json().catch(() => ({}))) as { error?: string };
+					throw new Error(body.error || 'No se pudo verificar tu acceso. Recarga la página para intentar de nuevo.');
+				}
+				const data = (await response.json()) as AccountProfile;
+				if (
+					typeof data.name !== 'string' ||
+					!data.name.trim() ||
+					(data.account !== null && (!data.account?.number || !data.account?.type || !data.account?.bank))
+				) {
+					throw new Error('El registro de tu cuenta está incompleto. Contacta al administrador.');
+				}
+				setProfile(data);
+				setForm(createInitialForm(data));
+			})
+			.catch((error: unknown) => {
+				if (!controller.signal.aborted) setProfileError(error instanceof Error ? error.message : 'No se pudo cargar tu cuenta.');
+			});
+		return () => controller.abort();
+	}, []);
 
 	const validate = () => {
 		const nextErrors = validateRequest(form.request);
@@ -144,7 +179,7 @@ export default function App() {
 			const image = new Image();
 			image.src = src;
 			await image.decode();
-			updatePerson('signature', src);
+			setForm((current) => ({ ...current, person: { ...current.person, signature: src } }));
 			setErrors([]);
 		} catch {
 			setErrors(['No se pudo abrir la imagen de la firma. Selecciona otro archivo.']);
@@ -175,7 +210,7 @@ export default function App() {
 
 	const resetForm = () => {
 		if (!window.confirm('¿Deseas borrar los datos de esta solicitud?')) return;
-		setForm(createInitialForm());
+		setForm(createInitialForm(profile ?? undefined));
 		setErrors([]);
 	};
 
@@ -194,14 +229,13 @@ export default function App() {
 					{
 						name: 'stage_travel_request',
 						title: 'Preparar solicitud de viáticos',
-						description: 'Completa la fecha y el beneficiario del borrador visible. No genera ni envía el PDF.',
+						description: 'Completa la fecha del borrador visible. No genera ni envía el PDF.',
 						inputSchema: {
 							type: 'object',
 							properties: {
 								requestDate: { type: 'string', description: 'Fecha en formato AAAA-MM-DD.' },
-								beneficiaryName: { type: 'string' },
 							},
-							required: ['requestDate', 'beneficiaryName'],
+							required: ['requestDate'],
 							additionalProperties: false,
 						},
 						annotations: { readOnlyHint: false, untrustedContentHint: false },
@@ -211,12 +245,8 @@ export default function App() {
 							if (typeof data.requestDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(data.requestDate) || !formatDate(data.requestDate)) {
 								throw new Error('requestDate debe usar el formato AAAA-MM-DD.');
 							}
-							if (typeof data.beneficiaryName !== 'string' || !data.beneficiaryName.trim()) {
-								throw new Error('beneficiaryName debe contener un nombre.');
-							}
 							setForm((current) => ({
 								...current,
-								person: { ...current.person, name: String(data.beneficiaryName).trim() },
 								request: { ...current.request, date: String(data.requestDate) },
 							}));
 							return { status: 'draft_staged' };
@@ -230,6 +260,22 @@ export default function App() {
 		}
 		return () => lifecycle.abort();
 	}, []);
+
+	if (!profile) {
+		return (
+			<main className="app-shell">
+				<section className="form-panel" aria-live="polite">
+					<h1>Solicitud de viáticos</h1>
+					<p>{profileError || 'Consultando tus datos de cuenta…'}</p>
+					{profileError && (
+						<button type="button" onClick={() => window.location.reload()}>
+							Intentar de nuevo
+						</button>
+					)}
+				</section>
+			</main>
+		);
+	}
 
 	return (
 		<main className="app-shell">
@@ -280,13 +326,8 @@ export default function App() {
 								<span>
 									Nombre del beneficiario <em>*</em>
 								</span>
-								<input
-									value={form.person.name}
-									maxLength={100}
-									onChange={(event) => updatePerson('name', event.target.value)}
-									placeholder="Nombre completo"
-								/>
-								<small>Se usa también en el titular de la cuenta, solicitado por y elaborado por.</small>
+								<input value={form.person.name} maxLength={100} readOnly />
+								<small>Nombre asociado a tu correo. Se usa también en el titular de la cuenta, solicitado por y elaborado por.</small>
 							</label>
 							<label>
 								<span>
@@ -296,21 +337,37 @@ export default function App() {
 									value={form.account.number}
 									maxLength={40}
 									onChange={(event) => updateAccount('number', event.target.value)}
-									placeholder="Número de cuenta"
+									readOnly={Boolean(profile.account)}
+									placeholder={profile.account ? '' : 'Número de cuenta'}
 								/>
 							</label>
 							<label>
 								<span>
 									Tipo de cuenta <em>*</em>
 								</span>
-								<input value={form.account.type} maxLength={40} onChange={(event) => updateAccount('type', event.target.value)} />
+								<input
+									value={form.account.type}
+									maxLength={40}
+									readOnly={Boolean(profile.account)}
+									onChange={(event) => updateAccount('type', event.target.value)}
+								/>
 							</label>
 							<label className="full-width">
 								<span>
 									Descripción de la cuenta / Banco <em>*</em>
 								</span>
-								<input value={form.account.bank} maxLength={80} onChange={(event) => updateAccount('bank', event.target.value)} />
+								<input
+									value={form.account.bank}
+									maxLength={80}
+									readOnly={Boolean(profile.account)}
+									onChange={(event) => updateAccount('bank', event.target.value)}
+								/>
 							</label>
+							<p className="full-width">
+								{profile.account
+									? 'Estos datos bancarios provienen del listado de colaboradores.'
+									: 'Tu cuenta aún no figura en el listado. Ingresa tus datos para esta solicitud; no se guardarán para la próxima vez.'}
+							</p>
 							<label className="full-width">
 								<span>Firma del beneficiario / Elaborado por</span>
 								<input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleSignature} />
@@ -319,7 +376,11 @@ export default function App() {
 							{form.person.signature && (
 								<div className="signature-preview full-width">
 									<img src={form.person.signature} alt={`Firma de ${form.person.name || 'la persona beneficiaria'}`} />
-									<button type="button" className="secondary-button" onClick={() => updatePerson('signature', '')}>
+									<button
+										type="button"
+										className="secondary-button"
+										onClick={() => setForm((current) => ({ ...current, person: { ...current.person, signature: '' } }))}
+									>
 										Quitar firma
 									</button>
 								</div>

@@ -176,3 +176,8 @@ test-results/
 # Local PDF previews and samples (may contain request data)
 /tmp/
 /output/
+
+# Private account directory exports and generated import files
+*cuentas bancarias*.csv
+account-import*.sql
+private-data/
