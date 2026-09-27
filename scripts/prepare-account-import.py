@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -78,6 +79,10 @@ def main() -> None:
         for row in rows:
             values = ", ".join(sql_value(value) for value in row)
             lines.append(f"INSERT INTO employee_accounts (email, name, account_number, account_type, bank) VALUES ({values});")
+        active_signature_keys = ", ".join(
+            sql_value("signatures/" + hashlib.sha256(row[0].encode("utf-8")).hexdigest()) for row in rows
+        )
+        lines.append(f"DELETE FROM employee_signatures WHERE key NOT IN ({active_signature_keys});")
         descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as file:
             file.write("\n".join(lines) + "\n")

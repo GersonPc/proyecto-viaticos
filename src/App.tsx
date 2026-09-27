@@ -381,7 +381,7 @@ export default function App() {
 					</div>
 				</div>
 				<div className="header-actions">
-					<span className="draft-status">Los datos permanecen en este dispositivo</span>
+					<span className="draft-status">La solicitud permanece en este dispositivo</span>
 					<button type="button" className="primary-button" disabled={preparingPrint} onClick={handlePrint}>
 						Generar PDF
 					</button>
@@ -471,7 +471,7 @@ export default function App() {
 											? '¿Deseas reemplazar tu firma guardada con esta imagen?'
 											: '¿Deseas guardar tu firma en la aplicación para próximas solicitudes?'}
 									</strong>
-									<p>Solo tu cuenta podrá recuperarla. Si prefieres, la imagen se usará únicamente en esta solicitud.</p>
+									<p>Se cargará cuando ingreses con tu correo. Si prefieres, la imagen se usará únicamente en esta solicitud.</p>
 									<div className="signature-actions">
 										<button type="button" className="primary-button" onClick={() => void saveSignature()} disabled={signatureBusy}>
 											{signatureBusy ? 'Guardando…' : savedSignature ? 'Reemplazar firma guardada' : 'Guardar para próximas solicitudes'}

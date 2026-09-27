@@ -47,13 +47,13 @@ La base D1 `proyecto-viaticos-accounts` ya está creada, enlazada en `wrangler.j
 1. Ejecuta `pnpm cf-typegen`, `pnpm check` y `pnpm build`.
 2. Comprueba el acceso con un correo con cuenta, el correo sin cuenta y un correo ausente del listado antes de fusionar la rama en `main`. Un correo permitido por Access que no esté en D1 no puede consultar cuentas.
 
-Para actualizar el listado más adelante, con el CSV fuera del repositorio, ejecuta `python3 scripts/prepare-account-import.py /ruta/listado.csv --output /private/tmp/account-import.sql`. El script valida correos duplicados y cuentas incompletas. Luego ejecuta `pnpm exec wrangler d1 execute ACCOUNTS_DB --remote --file /private/tmp/account-import.sql` y elimina el SQL temporal. La importación reemplaza el directorio anterior completo.
+Para actualizar el listado más adelante, con el CSV fuera del repositorio, ejecuta `python3 scripts/prepare-account-import.py /ruta/listado.csv --output /private/tmp/account-import.sql`. El script valida correos duplicados y cuentas incompletas. Luego ejecuta `pnpm exec wrangler d1 execute ACCOUNTS_DB --remote --file /private/tmp/account-import.sql` y elimina el SQL temporal. La importación reemplaza el directorio anterior completo, conserva las firmas de quienes permanecen en él y elimina las firmas de correos retirados.
 
 El CSV y el SQL generado contienen datos bancarios: guárdalos fuera de Git y no compartas sus contenidos en registros o capturas. Para desarrollo local, `access.dev` simula `dev@example.invalid`; utiliza únicamente registros de prueba en la D1 local.
 
 ## Firma personal guardada
 
-Al seleccionar una firma por primera vez, la persona decide si desea guardarla para próximas solicitudes o usarla solo en la solicitud actual. La firma guardada se carga automáticamente al abrir la aplicación. Se puede quitar de la solicitud actual, reemplazar o eliminar de forma permanente desde el formulario. La firma se consulta y modifica solo mediante el correo verificado por Cloudflare Access y únicamente si ese correo figura en el directorio D1.
+Al seleccionar una firma por primera vez, la persona decide si desea guardarla para próximas solicitudes o usarla solo en la solicitud actual. La firma guardada se carga automáticamente al abrir la aplicación. Se puede quitar de la solicitud actual, reemplazar o eliminar la copia guardada desde el formulario. La firma se consulta y modifica solo mediante el correo verificado por Cloudflare Access y únicamente si ese correo figura en el directorio D1.
 
 Las firmas se almacenan en una tabla separada de la misma D1 privada, mediante la migración `0002_signatures.sql`. Cada imagen se limita a 1,5 MB en D1; si el archivo original supera ese tamaño, el navegador intenta reducirlo antes de guardarlo. La firma no se incluye en Git ni se expone como archivo público. Antes de publicar esta versión, ejecuta `pnpm exec wrangler d1 migrations apply proyecto-viaticos-accounts --remote`.
 
