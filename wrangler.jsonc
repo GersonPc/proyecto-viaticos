@@ -23,7 +23,7 @@
 	"access": {
 		"dev": {
 			"aud": "local-dev",
-			"identity": { "email": "dev@example.invalid" },
+			"identity": { "email": "dev@tecnasa.com" },
 		},
 	},
 	"observability": {

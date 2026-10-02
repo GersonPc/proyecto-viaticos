@@ -63,7 +63,7 @@ function hasImageSignature(bytes: Uint8Array, contentType: string): boolean {
 	);
 }
 
-async function readSignature(request: Request): Promise<Uint8Array | null> {
+async function readBody(request: Request, maxBytes: number): Promise<Uint8Array | null> {
 	if (!request.body) return null;
 	const reader = request.body.getReader();
 	const chunks: Uint8Array[] = [];
@@ -72,7 +72,7 @@ async function readSignature(request: Request): Promise<Uint8Array | null> {
 		const { done, value } = await reader.read();
 		if (done) break;
 		size += value.byteLength;
-		if (size > MAX_SIGNATURE_BYTES) {
+		if (size > maxBytes) {
 			await reader.cancel().catch(() => {});
 			return null;
 		}
@@ -87,15 +87,74 @@ async function readSignature(request: Request): Promise<Uint8Array | null> {
 	return bytes;
 }
 
+async function handleAccount(request: Request, env: AccountEnv, email: string): Promise<Response> {
+	if (!env.ACCOUNTS_DB) return json({ error: 'El directorio de cuentas no está disponible.' }, 503);
+	try {
+		if (request.method === 'PUT') {
+			if (request.headers.get('Origin') !== new URL(request.url).origin) return json({ error: 'Origen no permitido.' }, 403);
+			if (request.headers.get('Content-Type')?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
+				return json({ error: 'Envía los datos de la cuenta en formato JSON.' }, 415);
+			}
+			const bytes = await readBody(request, 4096);
+			if (!bytes) return json({ error: 'Los datos de la cuenta superan el tamaño permitido.' }, 413);
+			let data;
+			try {
+				data = JSON.parse(new TextDecoder().decode(bytes));
+			} catch {
+				return json({ error: 'Los datos de la cuenta no son válidos.' }, 400);
+			}
+			const values = [data?.name, data?.account?.number, data?.account?.type, data?.account?.bank];
+			const limits = [100, 40, 40, 80];
+			if (
+				values.some(
+					(value, index) =>
+						typeof value !== 'string' ||
+						!value.trim() ||
+						value.trim().length > limits[index] ||
+						Array.from(value).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127),
+				)
+			) {
+				return json({ error: 'Completa nombre, número, tipo y banco con datos válidos.' }, 400);
+			}
+			// Only the verified owner may fill an empty account. The conditional write
+			// also prevents simultaneous registrations from replacing a saved account.
+			const row = await env.ACCOUNTS_DB.prepare(
+				`INSERT INTO employee_accounts (email, name, account_number, account_type, bank) VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT(email) DO UPDATE SET account_number = excluded.account_number, account_type = excluded.account_type, bank = excluded.bank
+				WHERE employee_accounts.account_number IS NULL
+				RETURNING name, account_number, account_type, bank`,
+			)
+				.bind(email, ...values.map((value: string) => value.trim()))
+				.first<AccountRow>();
+			if (!row) return json({ error: 'Ya tienes una cuenta guardada. Recarga la página para cargarla.' }, 409);
+			return json({ name: row.name, account: { number: row.account_number, type: row.account_type, bank: row.bank } });
+		}
+		const row = await env.ACCOUNTS_DB.prepare(
+			'SELECT name, account_number, account_type, bank FROM employee_accounts WHERE email = ? LIMIT 1',
+		)
+			.bind(email)
+			.first<AccountRow>();
+		return json({
+			name: row?.name ?? '',
+			account: row?.account_number ? { number: row.account_number, type: row.account_type, bank: row.bank } : null,
+		});
+	} catch {
+		return json(
+			{
+				error:
+					request.method === 'PUT'
+						? 'No se pudo guardar tu cuenta. Intenta de nuevo.'
+						: 'No se pudieron consultar tus datos. Intenta de nuevo.',
+			},
+			503,
+		);
+	}
+}
+
 async function handleSignature(request: Request, env: AccountEnv, email: string): Promise<Response> {
 	if (!['GET', 'PUT', 'DELETE'].includes(request.method)) return json({ error: 'Método no permitido.' }, 405);
 	if (!env.ACCOUNTS_DB) return json({ error: 'El almacenamiento de firmas no está disponible.' }, 503);
 	try {
-		const collaborator = await env.ACCOUNTS_DB.prepare('SELECT 1 AS allowed FROM employee_accounts WHERE email = ? LIMIT 1')
-			.bind(email)
-			.first<{ allowed: number }>();
-		if (!collaborator) return json({ error: 'Tu correo no aparece en el listado de colaboradores.' }, 404);
-
 		const key = await signatureKey(email);
 		if (request.method === 'GET') {
 			const row = await env.ACCOUNTS_DB.prepare('SELECT content_type, image FROM employee_signatures WHERE key = ? LIMIT 1')
@@ -116,7 +175,7 @@ async function handleSignature(request: Request, env: AccountEnv, email: string)
 		if (!signatureTypes.has(contentType)) return json({ error: 'La firma debe ser PNG, JPG o WebP.' }, 415);
 		if (Number(request.headers.get('Content-Length')) > MAX_SIGNATURE_BYTES)
 			return json({ error: 'La firma guardada supera el tamaño permitido.' }, 413);
-		const bytes = await readSignature(request);
+		const bytes = await readBody(request, MAX_SIGNATURE_BYTES);
 		if (!bytes || bytes.byteLength === 0) return json({ error: 'La firma guardada supera el tamaño permitido o está vacía.' }, 413);
 		if (!hasImageSignature(bytes, contentType)) return json({ error: 'El archivo no corresponde a una imagen válida.' }, 415);
 		await env.ACCOUNTS_DB.prepare(
@@ -138,27 +197,13 @@ export async function handleRequest(request: Request, env: AccountEnv, ctx: Exec
 	}
 
 	if (url.pathname !== '/api/me' && url.pathname !== '/api/signature') return new Response(null, { status: 404 });
-	if (url.pathname === '/api/me' && request.method !== 'GET') return json({ error: 'Método no permitido.' }, 405);
+	if (url.pathname === '/api/me' && !['GET', 'PUT'].includes(request.method)) return json({ error: 'Método no permitido.' }, 405);
 
 	const email = await verifiedEmail(request, env, ctx);
 	if (!email) return json({ error: 'Inicia sesión para consultar tus datos.' }, 401);
+	if (!/^[^\s@]+@tecnasa\.com$/.test(email)) return json({ error: 'El acceso está disponible solo para correos @tecnasa.com.' }, 403);
 	if (url.pathname === '/api/signature') return handleSignature(request, env, email);
-	if (!env.ACCOUNTS_DB) return json({ error: 'El directorio de cuentas no está disponible.' }, 503);
-
-	try {
-		const row = await env.ACCOUNTS_DB.prepare(
-			'SELECT name, account_number, account_type, bank FROM employee_accounts WHERE email = ? LIMIT 1',
-		)
-			.bind(email)
-			.first<AccountRow>();
-		if (!row) return json({ error: 'Tu correo no aparece en el listado de colaboradores.' }, 404);
-		return json({
-			name: row.name,
-			account: row.account_number ? { number: row.account_number, type: row.account_type, bank: row.bank } : null,
-		});
-	} catch {
-		return json({ error: 'No se pudieron consultar tus datos. Intenta de nuevo.' }, 503);
-	}
+	return handleAccount(request, env, email);
 }
 
 export default {

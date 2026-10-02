@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import os
 import re
 from pathlib import Path
@@ -75,14 +74,16 @@ def main() -> None:
             raise ValueError("El SQL con cuentas debe escribirse fuera del repositorio.")
         if destination.exists():
             raise ValueError("El archivo de salida ya existe; elige uno nuevo.")
-        lines = ["DELETE FROM employee_accounts;"]
+        lines = []
         for row in rows:
             values = ", ".join(sql_value(value) for value in row)
-            lines.append(f"INSERT INTO employee_accounts (email, name, account_number, account_type, bank) VALUES ({values});")
-        active_signature_keys = ", ".join(
-            sql_value("signatures/" + hashlib.sha256(row[0].encode("utf-8")).hexdigest()) for row in rows
-        )
-        lines.append(f"DELETE FROM employee_signatures WHERE key NOT IN ({active_signature_keys});")
+            lines.append(
+                f"INSERT INTO employee_accounts (email, name, account_number, account_type, bank) VALUES ({values}) "
+                "ON CONFLICT(email) DO UPDATE SET name = excluded.name, "
+                "account_number = COALESCE(excluded.account_number, employee_accounts.account_number), "
+                "account_type = COALESCE(excluded.account_type, employee_accounts.account_type), "
+                "bank = COALESCE(excluded.bank, employee_accounts.bank);"
+            )
         descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as file:
             file.write("\n".join(lines) + "\n")

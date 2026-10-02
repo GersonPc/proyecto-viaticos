@@ -132,10 +132,13 @@ h1 {
 	padding: 14px 18px;
 }
 .secondary-button {
+	display: inline-flex;
+	align-items: center;
 	padding: 13px 16px;
 	color: var(--ink);
 	background: #fff;
 	border: 1px solid #dcdcdc;
+	text-decoration: none;
 }
 .error-banner {
 	width: min(1500px, calc(100% - 40px));
@@ -154,6 +157,33 @@ h1 {
 	margin: 7px 0 0;
 	padding-left: 19px;
 	font-size: 13px;
+}
+.pdf-result {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px 20px;
+	width: min(1500px, calc(100% - 40px));
+	margin: 20px auto -6px;
+	padding: 15px 18px;
+	border: 1px solid var(--line);
+	border-left: 5px solid var(--accent-complete);
+	border-radius: 10px;
+	background: #fff;
+}
+.pdf-result strong {
+	font-size: 15px;
+}
+.pdf-result p {
+	margin: 4px 0 0;
+	font-size: 13px;
+	line-height: 1.5;
+}
+.pdf-result-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
 }
 
 .workspace {
@@ -774,7 +804,8 @@ button:disabled {
 		white-space: nowrap;
 	}
 	.workspace,
-	.error-banner {
+	.error-banner,
+	.pdf-result {
 		width: min(100% - 22px, 900px);
 	}
 	.workspace {
@@ -822,6 +853,7 @@ button:disabled {
 	}
 	.topbar,
 	.error-banner,
+	.pdf-result,
 	.form-column,
 	.preview-toolbar {
 		display: none !important;
