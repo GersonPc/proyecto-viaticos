@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { handleWorkflow } from './requests';
 
 type AccountEnv = Env & { ACCESS_TEAM_DOMAIN: string; ACCESS_AUD: string };
 type AccountRow = { name: string; account_number: string | null; account_type: string | null; bank: string | null };
@@ -196,12 +197,19 @@ export async function handleRequest(request: Request, env: AccountEnv, ctx: Exec
 		return json({ status: 'ok', message: 'Entorno de desarrollo listo' });
 	}
 
-	if (url.pathname !== '/api/me' && url.pathname !== '/api/signature') return new Response(null, { status: 404 });
+	const workflow =
+		url.pathname === '/api/session' ||
+		url.pathname === '/api/liquidations' ||
+		url.pathname === '/api/requests' ||
+		url.pathname.startsWith('/api/requests/') ||
+		url.pathname.startsWith('/api/admin/');
+	if (!workflow && url.pathname !== '/api/me' && url.pathname !== '/api/signature') return new Response(null, { status: 404 });
 	if (url.pathname === '/api/me' && !['GET', 'PUT'].includes(request.method)) return json({ error: 'Método no permitido.' }, 405);
 
 	const email = await verifiedEmail(request, env, ctx);
 	if (!email) return json({ error: 'Inicia sesión para consultar tus datos.' }, 401);
 	if (!/^[^\s@]+@tecnasa\.com$/.test(email)) return json({ error: 'El acceso está disponible solo para correos @tecnasa.com.' }, 403);
+	if (workflow) return handleWorkflow(request, env.ACCOUNTS_DB, email);
 	if (url.pathname === '/api/signature') return handleSignature(request, env, email);
 	return handleAccount(request, env, email);
 }

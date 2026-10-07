@@ -15,8 +15,16 @@ import {
 } from './request';
 import { RequestPages } from './RequestPage';
 import { RequestFields } from './RequestFields';
+import { FormSection } from './FormSection';
+import { PortalMenu } from './PortalMenu';
+import { ImageAttachmentInput } from './ImageAttachmentInput';
+import { attachmentImageTypes, ImageAttachmentError } from './imageClipboard';
 import { createRequestPdf } from './pdf';
 import { pdfFileName } from './pdfFileName';
+import { api, jsonOptions } from './api';
+import { RequestsPanel } from './RequestsPanel';
+import { LiquidationsPanel, liquidationNavigationEvent } from './LiquidationsPanel';
+import { type SubmittedRequest, type RequestDetail } from './workflow';
 
 type WebMcpTool = {
 	name: string;
@@ -32,7 +40,6 @@ type ModelContext = {
 };
 
 const IMAGES_PER_MAP_PAGE = 3;
-let nextImageId = 1;
 
 type AccountProfile = {
 	name: string;
@@ -100,8 +107,89 @@ function MapPages({ images }: { images: TravelImage[] }) {
 	));
 }
 
+type PortalView = 'form' | 'mine' | 'admin' | 'liquidations';
+const portalPaths: Record<PortalView, string> = {
+	form: '/',
+	mine: '/mis-solicitudes',
+	admin: '/administracion',
+	liquidations: '/liquidaciones',
+};
+const currentView = (): PortalView =>
+	window.location.pathname === portalPaths.liquidations
+		? 'liquidations'
+		: window.location.pathname === portalPaths.admin
+			? 'admin'
+			: window.location.pathname === portalPaths.mine
+				? 'mine'
+				: 'form';
+const currentLiquidation = () => {
+	const query = new URLSearchParams(window.location.search);
+	const id = query.get('solicitud');
+	return id ? { id, admin: query.get('consulta') === 'admin' } : null;
+};
+
 export default function App() {
 	const [form, setForm] = useState<RequestForm>(createInitialForm);
+	const [formEpoch, setFormEpoch] = useState(0);
+	const [view, setView] = useState<PortalView>(currentView);
+	const [liquidationSelection, setLiquidationSelection] = useState(currentLiquidation);
+	const [liquidationBusy, setLiquidationBusy] = useState(false);
+	const currentPortalUrl = useRef(window.location.pathname + window.location.search);
+	const canLeave = () => window.dispatchEvent(new Event(liquidationNavigationEvent, { cancelable: true }));
+	const navigate = (next: PortalView, leaveApproved = false) => {
+		if (!leaveApproved && !canLeave()) return;
+		const path = portalPaths[next];
+		window.history.pushState(null, '', path);
+		currentPortalUrl.current = path;
+		setLiquidationSelection(null);
+		setView(next);
+	};
+	const openLiquidation = (id: string, admin = false) => {
+		if (!canLeave()) return;
+		const path = `${portalPaths.liquidations}?${new URLSearchParams({ solicitud: id, ...(admin ? { consulta: 'admin' } : {}) })}`;
+		window.history.pushState(null, '', path);
+		currentPortalUrl.current = path;
+		setLiquidationSelection({ id, admin });
+		setView('liquidations');
+		window.scrollTo({ top: 0 });
+	};
+	useEffect(() => {
+		const back = () => {
+			if (!window.dispatchEvent(new Event(liquidationNavigationEvent, { cancelable: true }))) {
+				window.history.pushState(null, '', currentPortalUrl.current);
+				return;
+			}
+			currentPortalUrl.current = window.location.pathname + window.location.search;
+			setView(currentView());
+			setLiquidationSelection(currentLiquidation());
+		};
+		window.addEventListener('popstate', back);
+		return () => window.removeEventListener('popstate', back);
+	}, []);
+	const [session, setSession] = useState<{ isAdmin: boolean; canManageAdmins: boolean } | null>(null);
+	const [sessionError, setSessionError] = useState('');
+	const [submissionBusy, setSubmissionBusy] = useState(false);
+	const [attachmentBusy, setAttachmentBusy] = useState(false);
+	const [attachmentNotice, setAttachmentNotice] = useState('');
+	const attachmentInFlight = useRef(false);
+	const [openingRequest, setOpeningRequest] = useState(false);
+	const openingInFlight = useRef(false);
+	const [submissionNotice, setSubmissionNotice] = useState('');
+	const [editing, setEditing] = useState<SubmittedRequest | null>(null);
+	const [submitted, setSubmitted] = useState<SubmittedRequest | null>(null);
+	const submissionIntent = useRef<{ form: RequestForm; id: string; key: string } | null>(null);
+	const submissionInFlight = useRef(false);
+	const navigationBusy = submissionBusy || attachmentBusy || openingRequest || liquidationBusy;
+	const formLocked = navigationBusy || submitted !== null;
+	useEffect(() => {
+		const controller = new AbortController();
+		void api<{ isAdmin: boolean; canManageAdmins: boolean }>('/api/session', { signal: controller.signal })
+			.then(setSession)
+			.catch((e: Error) => {
+				if (!controller.signal.aborted) setSessionError(e.message);
+			});
+		return () => controller.abort();
+	}, []);
 	const [profile, setProfile] = useState<AccountProfile | null>(null);
 	const [profileError, setProfileError] = useState('');
 	const [accountBusy, setAccountBusy] = useState(false);
@@ -222,9 +310,92 @@ export default function App() {
 		if (!form.person.name.trim()) nextErrors.push('Ingresa el nombre del beneficiario.');
 		if (!form.account.number.trim()) nextErrors.push('Ingresa el número de cuenta.');
 		if (!form.account.bank.trim() || !form.account.type.trim()) nextErrors.push('Completa la descripción y el tipo de cuenta.');
-		if (!profile?.account) nextErrors.push('Guarda tu cuenta en Transferencia antes de generar el PDF.');
+		if (!profile?.account) nextErrors.push('Guarda tu cuenta en Transferencia antes de generar el PDF o enviar la solicitud.');
 		setErrors(nextErrors);
+		if (nextErrors.length)
+			document.querySelectorAll<HTMLDetailsElement>('.form-disclosure').forEach((section) => {
+				section.open = true;
+			});
 		return nextErrors.length === 0;
+	};
+
+	const sendRequest = async () => {
+		if (submissionInFlight.current || attachmentInFlight.current || openingInFlight.current || signatureBusy || accountBusy || submitted)
+			return;
+		if (!validate()) return;
+		if (!form.request.concept.trim()) {
+			setErrors(['Ingresa el objetivo específico antes de enviar.']);
+			document.querySelectorAll<HTMLDetailsElement>('.form-disclosure').forEach((section) => {
+				section.open = true;
+			});
+			return;
+		}
+		const source = form;
+		if (!submissionIntent.current || submissionIntent.current.form !== source) {
+			submissionIntent.current = { form: source, id: editing?.id ?? crypto.randomUUID(), key: crypto.randomUUID() };
+		}
+		const intent = submissionIntent.current;
+		submissionInFlight.current = true;
+		setSubmissionBusy(true);
+		setSubmissionNotice('');
+		try {
+			const item = await api<SubmittedRequest>(
+				editing ? `/api/requests/${editing.id}` : '/api/requests',
+				jsonOptions(editing ? 'PUT' : 'POST', {
+					id: intent.id,
+					key: intent.key,
+					...(editing ? { revision: editing.revision } : {}),
+					snapshot: { schemaVersion: 1, request: source.request, signature: source.person.signature },
+				}),
+			);
+			setSubmitted(item);
+			setEditing(null);
+			setErrors([]);
+			setSubmissionNotice('Solicitud enviada a administración. Puedes consultar su estado en Mis solicitudes.');
+		} catch (e) {
+			setErrors([e instanceof Error ? e.message : 'No se pudo enviar la solicitud.']);
+		} finally {
+			setSubmissionBusy(false);
+			submissionInFlight.current = false;
+		}
+	};
+	const editRequest = async (item: SubmittedRequest) => {
+		if (submissionInFlight.current || attachmentInFlight.current || openingInFlight.current || signatureBusy)
+			throw new Error('Espera a que termine la operación actual.');
+		if (
+			!submitted &&
+			(form.request.departureDate || form.request.concept) &&
+			!window.confirm('¿Abrir la solicitud rechazada y reemplazar el borrador actual?')
+		)
+			return;
+		openingInFlight.current = true;
+		setOpeningRequest(true);
+		try {
+			const detail = await api<RequestDetail>(`/api/requests/${item.id}`);
+			if (detail.item.status !== 'rejected') throw new Error('La solicitud ya cambió de estado. Actualiza la tabla.');
+			setForm({
+				request: detail.snapshot.request,
+				person: { name: profile?.name ?? detail.item.name, signature: detail.snapshot.signature },
+				account: profile?.account ?? form.account,
+			});
+			setFormEpoch((value) => value + 1);
+			setAttachmentNotice('');
+			setEditing(detail.item);
+			setSubmitted(null);
+			submissionIntent.current = null;
+			setPendingSignature(null);
+			setErrors([]);
+			setSubmissionNotice(
+				detail.item.reviewReason
+					? `Solicitud rechazada: ${detail.item.reviewReason}`
+					: 'Solicitud rechazada sin observación. Corrígela y vuelve a enviarla.',
+			);
+			navigate('form');
+			window.scrollTo({ top: 0 });
+		} finally {
+			openingInFlight.current = false;
+			setOpeningRequest(false);
+		}
 	};
 
 	const preparePdf = async () => {
@@ -276,6 +447,7 @@ export default function App() {
 	};
 
 	const handleSignature = async (event: ChangeEvent<HTMLInputElement>) => {
+		if (attachmentInFlight.current || submissionInFlight.current || submitted) return;
 		const file = event.currentTarget.files?.[0];
 		event.currentTarget.value = '';
 		if (!file) return;
@@ -283,6 +455,8 @@ export default function App() {
 			setErrors(['La firma debe ser PNG, JPG o WebP y no superar 5 MB.']);
 			return;
 		}
+		attachmentInFlight.current = true;
+		setAttachmentBusy(true);
 		try {
 			const src = await fileToDataUrl(file);
 			const image = new Image();
@@ -294,6 +468,9 @@ export default function App() {
 			setErrors([]);
 		} catch {
 			setErrors(['No se pudo abrir la imagen de la firma. Selecciona otro archivo.']);
+		} finally {
+			attachmentInFlight.current = false;
+			setAttachmentBusy(false);
 		}
 	};
 
@@ -341,31 +518,66 @@ export default function App() {
 		}
 	};
 
-	const handleMapImage = async (event: ChangeEvent<HTMLInputElement>) => {
-		const files = Array.from(event.currentTarget.files ?? []);
-		event.currentTarget.value = '';
+	const addMapImages = async (getFiles: () => Promise<File[]> | File[]) => {
+		if (attachmentInFlight.current || submissionInFlight.current || openingInFlight.current || submitted) return;
 		const date = form.request.departureDate;
+		attachmentInFlight.current = true;
+		setAttachmentBusy(true);
+		setAttachmentNotice('');
 		try {
+			const files = await getFiles();
+			if (!files.length) return;
+			if (mapImages.length + files.length > 30) throw new ImageAttachmentError('Puedes adjuntar hasta 30 imágenes por solicitud.');
+			if (files.some((file) => file.size > 5 * 1024 * 1024))
+				throw new ImageAttachmentError('Cada imagen puede tener hasta 5 MB. Reduce el tamaño antes de adjuntarla.');
 			const uploaded = await Promise.all(
 				files.map(async (file) => {
-					if (!file.type.startsWith('image/')) throw new Error('Selecciona archivos de imagen para los mapas o cotizaciones.');
+					if (!attachmentImageTypes.some((type) => type === file.type))
+						throw new ImageAttachmentError('Los mapas y cotizaciones deben ser PNG, JPG o WebP.');
 					const src = await fileToDataUrl(file);
 					const decoded = new Image();
 					decoded.src = src;
 					await decoded.decode();
-					return { id: `map-image-${nextImageId++}`, name: file.name, src, kind: 'route' as const, kilometers: '', price: '', date };
+					return {
+						id: crypto.randomUUID(),
+						name: file.name || 'Imagen pegada',
+						src,
+						kind: 'route' as const,
+						kilometers: '',
+						price: '',
+						date,
+					};
 				}),
 			);
 			setMapImages((current) => [...current, ...uploaded]);
 			setErrors([]);
-		} catch {
-			setErrors(['No se pudo abrir alguna imagen. Revisa los archivos de mapas o cotizaciones.']);
+			setAttachmentNotice(
+				uploaded.length === 1
+					? 'Imagen agregada. Completa sus kilómetros y fecha.'
+					: `${uploaded.length} imágenes agregadas. Completa sus datos.`,
+			);
+		} catch (error) {
+			const message =
+				error instanceof ImageAttachmentError ? error.message : 'No se pudo abrir alguna imagen. Usa mapas o cotizaciones PNG, JPG o WebP.';
+			setErrors([message]);
+			setAttachmentNotice(message);
+		} finally {
+			attachmentInFlight.current = false;
+			setAttachmentBusy(false);
 		}
 	};
 
 	const resetForm = () => {
-		if (!window.confirm('¿Deseas borrar los datos de esta solicitud?')) return;
+		if (submissionInFlight.current || attachmentInFlight.current || openingInFlight.current) return;
+		if (!canLeave() || !window.confirm('¿Deseas borrar los datos de esta solicitud?')) return;
 		setForm(createInitialForm(profile ?? undefined, savedSignature ?? ''));
+		setFormEpoch((value) => value + 1);
+		setAttachmentNotice('');
+		setEditing(null);
+		setSubmitted(null);
+		submissionIntent.current = null;
+		setSubmissionNotice('');
+		navigate('form', true);
 		setPendingSignature(null);
 		setSignatureNotice('');
 		setAccountError('');
@@ -398,6 +610,7 @@ export default function App() {
 						},
 						annotations: { readOnlyHint: false, untrustedContentHint: false },
 						execute(input) {
+							if (submissionInFlight.current || submitted) throw new Error('Inicia una nueva solicitud para editar.');
 							if (!input || typeof input !== 'object') throw new Error('Los datos de la solicitud no son válidos.');
 							const data = input as Record<string, unknown>;
 							if (typeof data.requestDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(data.requestDate) || !formatDate(data.requestDate)) {
@@ -417,13 +630,13 @@ export default function App() {
 			// WebMCP es opcional; el formulario funciona sin esta integración.
 		}
 		return () => lifecycle.abort();
-	}, []);
+	}, [submitted]);
 
 	if (!profile) {
 		return (
 			<main className="app-shell">
 				<section className="form-panel" aria-live="polite">
-					<h1>Solicitud de viáticos</h1>
+					<h1>{view === 'liquidations' ? 'Liquidación de viáticos' : 'Solicitud de viáticos'}</h1>
 					<p>{profileError || 'Consultando tus datos de cuenta…'}</p>
 					{profileError && (
 						<button type="button" onClick={() => window.location.reload()}>
@@ -447,18 +660,79 @@ export default function App() {
 					</div>
 					<div>
 						<p className="eyebrow">TECNASA · PORTAL DE COLABORADORES</p>
-						<h1>Solicitud de viáticos</h1>
+						<h1>{view === 'liquidations' ? 'Liquidación de viáticos' : 'Solicitud de viáticos'}</h1>
 					</div>
 				</div>
 				<div className="header-actions">
-					<span className="draft-status">La solicitud permanece en este dispositivo</span>
-					<button type="button" className="primary-button" disabled={preparingPdf} onClick={() => void preparePdf()}>
-						{preparingPdf ? 'Preparando PDF…' : 'Generar PDF'}
-					</button>
+					<PortalMenu view={view} isAdmin={Boolean(session?.isAdmin)} disabled={navigationBusy} onNavigate={navigate} onNew={resetForm} />
 				</div>
 			</header>
 
-			{(readyFile || pdfNotice) && (
+			{sessionError && (
+				<p className="workflow-error" role="alert">
+					No se pudieron verificar los permisos: {sessionError}{' '}
+					<button type="button" onClick={() => window.location.reload()}>
+						Volver a intentar
+					</button>
+				</p>
+			)}
+			{view === 'mine' && <RequestsPanel onEdit={editRequest} onLiquidate={(item) => openLiquidation(item.id)} />}
+			{view === 'liquidations' && (
+				<LiquidationsPanel
+					selection={liquidationSelection}
+					onOpen={openLiquidation}
+					onClose={() => navigate(liquidationSelection?.admin ? 'admin' : 'liquidations')}
+					onBusy={setLiquidationBusy}
+				/>
+			)}
+			{view === 'admin' && session?.isAdmin && (
+				<RequestsPanel
+					admin
+					canManageAdmins={session.canManageAdmins}
+					onEdit={editRequest}
+					onLiquidate={(item) => openLiquidation(item.id, true)}
+				/>
+			)}
+			{view === 'admin' && !session && !sessionError && (
+				<p className="workflow-notice" role="status">
+					Verificando permisos de administración…
+				</p>
+			)}
+			{view === 'admin' && session && !session.isAdmin && (
+				<p className="workflow-error" role="alert">
+					No tienes permiso de administrador.
+				</p>
+			)}
+			{view === 'form' && (
+				<div className="submission-bar">
+					<div>
+						<strong>{submitted ? 'Solicitud enviada' : editing ? 'Corregir y reenviar' : 'Enviar a revisión'}</strong>
+						<p>{submissionNotice || 'Cuando la envíes, se guardará y aparecerá en la tabla de administración.'}</p>
+					</div>
+					<div className="submission-actions">
+						<button
+							type="button"
+							className="primary-button"
+							disabled={formLocked || signatureBusy || accountBusy}
+							onClick={() => void sendRequest()}
+						>
+							{submissionBusy
+								? 'Enviando…'
+								: attachmentBusy
+									? 'Cargando imágenes…'
+									: submitted
+										? 'Enviada'
+										: editing
+											? 'Reenviar solicitud'
+											: 'Enviar solicitud'}
+						</button>
+						<button type="button" className="secondary-button" disabled={preparingPdf || navigationBusy} onClick={() => void preparePdf()}>
+							{preparingPdf ? 'Preparando PDF…' : 'Generar PDF'}
+						</button>
+					</div>
+				</div>
+			)}
+			{view === 'form' && (readyFile || pdfNotice) && (
 				<div className="pdf-result" role="status" aria-live="polite">
 					{readyFile && (
 						<>
@@ -488,7 +762,7 @@ export default function App() {
 
 			{errors.length > 0 && (
 				<div className="error-banner" role="alert">
-					<strong>Falta información para generar el PDF</strong>
+					<strong>Revisa la solicitud</strong>
 					<ul>
 						{errors.map((error) => (
 							<li key={error}>{error}</li>
@@ -497,284 +771,303 @@ export default function App() {
 				</div>
 			)}
 
-			<section className="workspace">
+			<section className="workspace" hidden={view !== 'form'}>
 				<form className="form-column" onSubmit={handleSubmit}>
-					<section className="form-panel">
-						<div className="section-heading">
-							<span>01</span>
-							<div>
-								<h2>Transferencia</h2>
-								<p>Datos de la persona beneficiaria y su cuenta.</p>
-							</div>
-						</div>
-						<div className="field-grid">
-							<label className="full-width">
-								<span>
-									Nombre del beneficiario <em>*</em>
-								</span>
-								<input
-									value={form.person.name}
-									maxLength={100}
-									readOnly={Boolean(profile.name)}
-									disabled={accountBusy}
-									placeholder={profile.name ? '' : 'Tu nombre completo'}
-									onChange={(event) => setForm((current) => ({ ...current, person: { ...current.person, name: event.target.value } }))}
-								/>
-								<small>Nombre asociado a tu correo. Se usa también en el titular de la cuenta, solicitado por y elaborado por.</small>
-							</label>
-							<label>
-								<span>
-									No. de Cuenta <em>*</em>
-								</span>
-								<input
-									value={form.account.number}
-									maxLength={40}
-									onChange={(event) => updateAccount('number', event.target.value)}
-									readOnly={Boolean(profile.account)}
-									disabled={accountBusy}
-									placeholder={profile.account ? '' : 'Número de cuenta'}
-								/>
-							</label>
-							<label>
-								<span>
-									Tipo de cuenta <em>*</em>
-								</span>
-								<input
-									value={form.account.type}
-									maxLength={40}
-									readOnly={Boolean(profile.account)}
-									disabled={accountBusy}
-									onChange={(event) => updateAccount('type', event.target.value)}
-								/>
-							</label>
-							<label className="full-width">
-								<span>
-									Descripción de la cuenta / Banco <em>*</em>
-								</span>
-								<input
-									value={form.account.bank}
-									maxLength={80}
-									readOnly={Boolean(profile.account)}
-									disabled={accountBusy}
-									onChange={(event) => updateAccount('bank', event.target.value)}
-								/>
-							</label>
-							<p className="full-width">
-								{profile.account
-									? 'Estos datos bancarios están guardados y asociados a tu correo.'
-									: 'Tu cuenta aún no está registrada. Completa tus datos y pulsa Guardar cuenta; se cargarán en tus próximas solicitudes.'}
-							</p>
-							{!profile.account && (
-								<div className="full-width">
-									<button type="button" className="primary-button" onClick={() => void saveAccount()} disabled={accountBusy}>
-										{accountBusy ? 'Guardando…' : 'Guardar cuenta'}
-									</button>
-								</div>
-							)}
-							{accountError && (
-								<p className="full-width map-warning" role="alert">
-									{accountError}
+					<fieldset className="request-fieldset" disabled={formLocked}>
+						<FormSection
+							key={`transfer-${formEpoch}`}
+							panel
+							number="01"
+							title="Transferencia"
+							complete={Boolean(profile.account && form.person.name.trim() && !pendingSignature && !accountBusy && !signatureBusy)}
+							summary={`${form.person.name || 'Persona beneficiaria'} · ${profile.account ? 'Cuenta guardada' : 'Completa tu cuenta'}${form.person.signature ? ' · Firma cargada' : ' · Firma opcional'}`}
+						>
+							<div className="field-grid">
+								<label className="full-width">
+									<span>
+										Nombre del beneficiario <em>*</em>
+									</span>
+									<input
+										value={form.person.name}
+										maxLength={100}
+										readOnly={Boolean(profile.name)}
+										disabled={accountBusy}
+										placeholder={profile.name ? '' : 'Tu nombre completo'}
+										onChange={(event) => setForm((current) => ({ ...current, person: { ...current.person, name: event.target.value } }))}
+									/>
+									<small>Nombre asociado a tu correo. Se usa también en el titular de la cuenta, solicitado por y elaborado por.</small>
+								</label>
+								<label>
+									<span>
+										No. de Cuenta <em>*</em>
+									</span>
+									<input
+										value={form.account.number}
+										maxLength={40}
+										onChange={(event) => updateAccount('number', event.target.value)}
+										readOnly={Boolean(profile.account)}
+										disabled={accountBusy}
+										placeholder={profile.account ? '' : 'Número de cuenta'}
+									/>
+								</label>
+								<label>
+									<span>
+										Tipo de cuenta <em>*</em>
+									</span>
+									<input
+										value={form.account.type}
+										maxLength={40}
+										readOnly={Boolean(profile.account)}
+										disabled={accountBusy}
+										onChange={(event) => updateAccount('type', event.target.value)}
+									/>
+								</label>
+								<label className="full-width">
+									<span>
+										Descripción de la cuenta / Banco <em>*</em>
+									</span>
+									<input
+										value={form.account.bank}
+										maxLength={80}
+										readOnly={Boolean(profile.account)}
+										disabled={accountBusy}
+										onChange={(event) => updateAccount('bank', event.target.value)}
+									/>
+								</label>
+								<p className="full-width">
+									{profile.account
+										? 'Estos datos bancarios están guardados y asociados a tu correo.'
+										: 'Tu cuenta aún no está registrada. Completa tus datos y pulsa Guardar cuenta; se cargarán en tus próximas solicitudes.'}
 								</p>
-							)}
-							{accountNotice && (
-								<p className="full-width signature-notice" role="status">
-									{accountNotice}
-								</p>
-							)}
-							<label className="full-width">
-								<span>Firma del beneficiario / Elaborado por</span>
-								<input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleSignature} disabled={signatureBusy} />
-								<small>
-									La misma firma se utiliza en ambas hojas. PNG, JPG o WebP, hasta 5 MB. Puedes usarla solo ahora o guardarla para futuras
-									solicitudes.
-								</small>
-							</label>
-							{pendingSignature && (
-								<div className="signature-save-prompt full-width" role="group" aria-label="Decidir si guardar la firma">
-									<strong>
-										{savedSignature
-											? '¿Deseas reemplazar tu firma guardada con esta imagen?'
-											: '¿Deseas guardar tu firma en la aplicación para próximas solicitudes?'}
-									</strong>
-									<p>Se cargará cuando ingreses con tu correo. Si prefieres, la imagen se usará únicamente en esta solicitud.</p>
-									<div className="signature-actions">
-										<button type="button" className="primary-button" onClick={() => void saveSignature()} disabled={signatureBusy}>
-											{signatureBusy ? 'Guardando…' : savedSignature ? 'Reemplazar firma guardada' : 'Guardar para próximas solicitudes'}
+								{!profile.account && (
+									<div className="full-width">
+										<button type="button" className="primary-button" onClick={() => void saveAccount()} disabled={accountBusy}>
+											{accountBusy ? 'Guardando…' : 'Guardar cuenta'}
 										</button>
+									</div>
+								)}
+								{accountError && (
+									<p className="full-width map-warning" role="alert">
+										{accountError}
+									</p>
+								)}
+								{accountNotice && (
+									<p className="full-width signature-notice" role="status">
+										{accountNotice}
+									</p>
+								)}
+								<label className="full-width">
+									<span>Firma del beneficiario / Elaborado por</span>
+									<input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleSignature} disabled={signatureBusy} />
+									<small>
+										La misma firma se utiliza en ambas hojas. PNG, JPG o WebP, hasta 5 MB. Puedes usarla solo ahora o guardarla para futuras
+										solicitudes.
+									</small>
+								</label>
+								{pendingSignature && (
+									<div className="signature-save-prompt full-width" role="group" aria-label="Decidir si guardar la firma">
+										<strong>
+											{savedSignature
+												? '¿Deseas reemplazar tu firma guardada con esta imagen?'
+												: '¿Deseas guardar tu firma en la aplicación para próximas solicitudes?'}
+										</strong>
+										<p>Se cargará cuando ingreses con tu correo. Si prefieres, la imagen se usará únicamente en esta solicitud.</p>
+										<div className="signature-actions">
+											<button type="button" className="primary-button" onClick={() => void saveSignature()} disabled={signatureBusy}>
+												{signatureBusy ? 'Guardando…' : savedSignature ? 'Reemplazar firma guardada' : 'Guardar para próximas solicitudes'}
+											</button>
+											<button
+												type="button"
+												className="secondary-button"
+												onClick={() => {
+													setPendingSignature(null);
+													setSignatureNotice('Esta firma se usará solo en la solicitud actual.');
+												}}
+												disabled={signatureBusy}
+											>
+												Solo esta solicitud
+											</button>
+										</div>
+									</div>
+								)}
+								{signatureNotice && (
+									<p className="signature-notice full-width" role="status">
+										{signatureNotice}
+									</p>
+								)}
+								{form.person.signature && (
+									<div className="signature-preview full-width">
+										<img src={form.person.signature} alt={`Firma de ${form.person.name || 'la persona beneficiaria'}`} />
 										<button
 											type="button"
 											className="secondary-button"
 											onClick={() => {
+												setForm((current) => ({ ...current, person: { ...current.person, signature: '' } }));
 												setPendingSignature(null);
-												setSignatureNotice('Esta firma se usará solo en la solicitud actual.');
 											}}
-											disabled={signatureBusy}
 										>
-											Solo esta solicitud
+											Quitar de esta solicitud
 										</button>
 									</div>
-								</div>
-							)}
-							{signatureNotice && (
-								<p className="signature-notice full-width" role="status">
-									{signatureNotice}
-								</p>
-							)}
-							{form.person.signature && (
-								<div className="signature-preview full-width">
-									<img src={form.person.signature} alt={`Firma de ${form.person.name || 'la persona beneficiaria'}`} />
-									<button
-										type="button"
-										className="secondary-button"
-										onClick={() => {
-											setForm((current) => ({ ...current, person: { ...current.person, signature: '' } }));
-											setPendingSignature(null);
-										}}
-									>
-										Quitar de esta solicitud
-									</button>
-								</div>
-							)}
-							{savedSignature && (
-								<div className="signature-saved-controls full-width">
-									<span>Tu firma personal está guardada para próximas solicitudes.</span>
-									<div className="signature-actions">
-										{!form.person.signature && (
+								)}
+								{savedSignature && (
+									<div className="signature-saved-controls full-width">
+										<span>Tu firma personal está guardada para próximas solicitudes.</span>
+										<div className="signature-actions">
+											{!form.person.signature && (
+												<button
+													type="button"
+													className="secondary-button"
+													onClick={() => setForm((current) => ({ ...current, person: { ...current.person, signature: savedSignature } }))}
+												>
+													Usar firma guardada
+												</button>
+											)}
 											<button
 												type="button"
 												className="secondary-button"
-												onClick={() => setForm((current) => ({ ...current, person: { ...current.person, signature: savedSignature } }))}
+												onClick={() => void deleteSavedSignature()}
+												disabled={signatureBusy}
 											>
-												Usar firma guardada
+												Eliminar firma guardada
 											</button>
-										)}
-										<button type="button" className="secondary-button" onClick={() => void deleteSavedSignature()} disabled={signatureBusy}>
-											Eliminar firma guardada
-										</button>
-									</div>
-								</div>
-							)}
-						</div>
-						<p className="field-note">
-							Los encabezados y datos administrativos del formato están fijos. La fecha, el objetivo y las cantidades se completan desde
-							Solicitud.
-						</p>
-					</section>
-
-					<RequestFields form={form} setForm={setForm} />
-
-					<section className="form-panel">
-						<div className="section-heading">
-							<span>03</span>
-							<div>
-								<h2>Mapa-Cotización</h2>
-								<p>Sube cada imagen y selecciona Recorrido o Insumos.</p>
-							</div>
-						</div>
-						<label className={`upload-box ${mapImages.length ? 'has-file' : ''}`}>
-							<input type="file" accept="image/*" multiple onChange={handleMapImage} />
-							<span className="upload-icon">＋</span>
-							<strong>{mapImages.length ? 'Agregar más imágenes' : 'Subir imágenes'}</strong>
-							<small>
-								{mapImages.length
-									? `${mapImages.length} ${mapImages.length === 1 ? 'imagen cargada' : 'imágenes cargadas'}`
-									: 'Puedes seleccionar varias imágenes a la vez'}
-							</small>
-						</label>
-						<p className="field-note">
-							Los recorridos suman combustible según sus kilómetros. Los insumos suman su precio en quetzales. Cada gasto se asigna a la
-							fecha de la imagen.
-						</p>
-						{mapImages.length > 0 && (
-							<div className="map-image-list">
-								{mapImages.map((image, index) => (
-									<div className="map-card" key={image.id}>
-										<img src={image.src} alt="" />
-										<span>
-											<strong>Imagen {index + 1}</strong>
-											<small>{image.name}</small>
-										</span>
-										<button
-											type="button"
-											onClick={() => setMapImages((current) => current.filter((item) => item.id !== image.id))}
-											aria-label={`Quitar ${image.name}`}
-										>
-											×
-										</button>
-										<div className="map-metadata field-grid">
-											<label className="full-width">
-												<span>Tipo de gasto</span>
-												<select
-													aria-label={`Tipo de gasto de imagen ${index + 1}`}
-													value={image.kind}
-													onChange={(event) => updateMap(image.id, 'kind', event.target.value as TravelImage['kind'])}
-												>
-													<option value="route">Recorrido</option>
-													<option value="supplies">Insumos</option>
-												</select>
-											</label>
-											<label>
-												<span>{image.kind === 'supplies' ? 'Precio (Q)' : 'Kilómetros'}</span>
-												<input
-													aria-label={`${image.kind === 'supplies' ? 'Precio (Q)' : 'Kilómetros'} de imagen ${index + 1}`}
-													type="number"
-													min="0"
-													step="0.01"
-													placeholder="Ej. 100"
-													value={image.kind === 'supplies' ? image.price : image.kilometers}
-													onChange={(event) => updateMap(image.id, image.kind === 'supplies' ? 'price' : 'kilometers', event.target.value)}
-												/>
-											</label>
-											<label>
-												<span>{image.kind === 'supplies' ? 'Fecha del gasto' : 'Fecha del recorrido'}</span>
-												<input
-													aria-label={`Fecha de imagen ${index + 1}`}
-													type="date"
-													min={form.request.departureDate || undefined}
-													max={form.request.returnDate || undefined}
-													value={image.date}
-													onChange={(event) => updateMap(image.id, 'date', event.target.value)}
-												/>
-											</label>
-											<p className="full-width map-fuel">
-												{image.kind === 'supplies' ? (
-													<>
-														Insumos: <strong>Q{money(toCents(image.price))}</strong>
-													</>
-												) : (
-													<>
-														Combustible: <strong>Q{money(imageFuelCost(image))}</strong> · {image.kilometers || '0'} km × Q1.30
-													</>
-												)}
-											</p>
-											{image.date && !tripDates(form.request).includes(image.date) && (
-												<p className="full-width map-warning">
-													Esta fecha está fuera del viaje. Ajusta la fecha de la imagen o las fechas de salida y regreso.
-												</p>
-											)}
-											{(image.kind === 'supplies' ? image.price : image.kilometers) &&
-												!validDecimal(image.kind === 'supplies' ? image.price : image.kilometers) && (
-													<p className="full-width map-warning">
-														{image.kind === 'supplies'
-															? 'Usa un precio en quetzales desde 0, con hasta dos decimales.'
-															: 'Usa kilómetros desde 0, con hasta dos decimales.'}
-													</p>
-												)}
 										</div>
 									</div>
-								))}
+								)}
 							</div>
-						)}
-					</section>
+							<p className="field-note">
+								Los encabezados y datos administrativos del formato están fijos. La fecha, el objetivo y las cantidades se completan desde
+								Solicitud.
+							</p>
+						</FormSection>
 
-					<div className="form-actions">
-						<button type="button" className="secondary-button" onClick={resetForm}>
-							Limpiar formulario
-						</button>
-						<button type="submit" disabled={preparingPdf} className="primary-button large">
-							{preparingPdf ? 'Preparando PDF…' : 'Generar PDF'} <span>→</span>
-						</button>
-					</div>
+						<RequestFields key={`request-${formEpoch}`} form={form} setForm={setForm} />
+
+						<FormSection
+							key={`maps-${formEpoch}`}
+							panel
+							number="03"
+							title="Mapas y cotizaciones"
+							initialOpen={false}
+							autoCollapse={false}
+							complete={
+								mapImages.length > 0 &&
+								mapImages.every(
+									(image) =>
+										tripDates(form.request).includes(image.date) &&
+										validDecimal(image.kind === 'supplies' ? image.price : image.kilometers),
+								)
+							}
+							summary={
+								mapImages.length
+									? `${mapImages.length} ${mapImages.length === 1 ? 'imagen' : 'imágenes'} · ${form.request.images.reduce((sum, image) => sum + (image.kind === 'route' ? toCents(image.kilometers) : 0), 0) / 100} km`
+									: 'Opcional · Adjunta recorridos o insumos'
+							}
+						>
+							<ImageAttachmentInput
+								disabled={formLocked}
+								busy={attachmentBusy}
+								count={mapImages.length}
+								notice={attachmentNotice}
+								onAdd={addMapImages}
+							/>
+							<p className="field-note">
+								Los recorridos suman combustible según sus kilómetros. Los insumos suman su precio en quetzales. Cada gasto se asigna a la
+								fecha de la imagen. Hasta 30 imágenes PNG/JPG/WebP de 5 MB cada una; el envío completo admite 8 MB.
+							</p>
+							{mapImages.length > 0 && (
+								<div className="map-image-list">
+									{mapImages.map((image, index) => (
+										<div className="map-card" key={image.id}>
+											<img src={image.src} alt="" />
+											<span>
+												<strong>Imagen {index + 1}</strong>
+												<small>{image.name}</small>
+											</span>
+											<button
+												type="button"
+												onClick={() => {
+													setMapImages((current) => current.filter((item) => item.id !== image.id));
+													setAttachmentNotice('');
+												}}
+												aria-label={`Quitar ${image.name}`}
+											>
+												×
+											</button>
+											<div className="map-metadata field-grid">
+												<label className="full-width">
+													<span>Tipo de gasto</span>
+													<select
+														aria-label={`Tipo de gasto de imagen ${index + 1}`}
+														value={image.kind}
+														onChange={(event) => updateMap(image.id, 'kind', event.target.value as TravelImage['kind'])}
+													>
+														<option value="route">Recorrido</option>
+														<option value="supplies">Insumos</option>
+													</select>
+												</label>
+												<label>
+													<span>{image.kind === 'supplies' ? 'Precio (Q)' : 'Kilómetros'}</span>
+													<input
+														aria-label={`${image.kind === 'supplies' ? 'Precio (Q)' : 'Kilómetros'} de imagen ${index + 1}`}
+														type="number"
+														min="0"
+														step="0.01"
+														placeholder="Ej. 100"
+														value={image.kind === 'supplies' ? image.price : image.kilometers}
+														onChange={(event) =>
+															updateMap(image.id, image.kind === 'supplies' ? 'price' : 'kilometers', event.target.value)
+														}
+													/>
+												</label>
+												<label>
+													<span>{image.kind === 'supplies' ? 'Fecha del gasto' : 'Fecha del recorrido'}</span>
+													<input
+														aria-label={`Fecha de imagen ${index + 1}`}
+														type="date"
+														min={form.request.departureDate || undefined}
+														max={form.request.returnDate || undefined}
+														value={image.date}
+														onChange={(event) => updateMap(image.id, 'date', event.target.value)}
+													/>
+												</label>
+												<p className="full-width map-fuel">
+													{image.kind === 'supplies' ? (
+														<>
+															Insumos: <strong>Q{money(toCents(image.price))}</strong>
+														</>
+													) : (
+														<>
+															Combustible: <strong>Q{money(imageFuelCost(image))}</strong> · {image.kilometers || '0'} km × Q1.30
+														</>
+													)}
+												</p>
+												{image.date && !tripDates(form.request).includes(image.date) && (
+													<p className="full-width map-warning">
+														Esta fecha está fuera del viaje. Ajusta la fecha de la imagen o las fechas de salida y regreso.
+													</p>
+												)}
+												{(image.kind === 'supplies' ? image.price : image.kilometers) &&
+													!validDecimal(image.kind === 'supplies' ? image.price : image.kilometers) && (
+														<p className="full-width map-warning">
+															{image.kind === 'supplies'
+																? 'Usa un precio en quetzales desde 0, con hasta dos decimales.'
+																: 'Usa kilómetros desde 0, con hasta dos decimales.'}
+														</p>
+													)}
+											</div>
+										</div>
+									))}
+								</div>
+							)}
+						</FormSection>
+
+						<div className="form-actions">
+							<button type="button" className="secondary-button" onClick={resetForm}>
+								Limpiar formulario
+							</button>
+						</div>
+					</fieldset>
 				</form>
 
 				<aside className="preview-panel" aria-label="Vista previa del PDF">
