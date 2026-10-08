@@ -27,15 +27,32 @@ async function canvasJpeg(canvas: HTMLCanvasElement): Promise<ArrayBuffer> {
 	return blob.arrayBuffer();
 }
 
-async function drawSvgPage(section: HTMLElement, size: { width: number; height: number }, template: string): Promise<ArrayBuffer> {
+async function drawSvgPage(section: HTMLElement, size: { width: number; height: number }, template?: string): Promise<ArrayBuffer> {
 	const source = section.querySelector('svg');
 	if (!source) throw new Error('Falta una página en la vista previa.');
 	const { canvas, context } = pageCanvas(size.width, size.height);
-	const background = await loadImage(template);
-	context.drawImage(background, 0, 0, size.width, size.height);
+	if (template) {
+		const background = await loadImage(template);
+		context.drawImage(background, 0, 0, size.width, size.height);
+	}
 
 	const overlay = source.cloneNode(true) as SVGSVGElement;
-	overlay.querySelector(`image[href="${template}"]`)?.remove();
+	if (template) overlay.querySelector(`image[href="${template}"]`)?.remove();
+	for (const element of overlay.querySelectorAll('image')) {
+		const href = element.getAttribute('href');
+		if (href?.startsWith('/')) {
+			const response = await fetch(href);
+			if (!response.ok) throw new Error('No se pudo cargar el logo del documento.');
+			const blob = await response.blob();
+			const data = await new Promise<string>((resolve, reject) => {
+				const reader = new FileReader();
+				reader.onload = () => resolve(String(reader.result));
+				reader.onerror = () => reject(reader.error);
+				reader.readAsDataURL(blob);
+			});
+			element.setAttribute('href', data);
+		}
+	}
 	overlay.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
 	overlay.setAttribute('width', String(size.width));
 	overlay.setAttribute('height', String(size.height));
@@ -91,4 +108,20 @@ export async function createRequestPdf(printArea: HTMLElement): Promise<Blob> {
 	}
 	const bytes = await pdf.save();
 	return new Blob([new Uint8Array(bytes)], { type: 'application/pdf' });
+}
+
+export async function createLiquidationPdf(printArea: HTMLElement): Promise<Blob> {
+	await document.fonts.ready;
+	const { PDFDocument } = await import('pdf-lib');
+	const pdf = await PDFDocument.create();
+	pdf.setTitle('Liquidación de viáticos');
+	const sections = Array.from(printArea.children).filter((c): c is HTMLElement => c instanceof HTMLElement);
+	if (!sections.length) throw new Error('No hay páginas para generar el PDF.');
+	for (const section of sections) {
+		const size = section.classList.contains('landscape-sheet') ? LETTER_LANDSCAPE : LETTER_PORTRAIT;
+		const jpeg = await drawSvgPage(section, size);
+		const embedded = await pdf.embedJpg(jpeg);
+		pdf.addPage([size.width, size.height]).drawImage(embedded, { x: 0, y: 0, width: size.width, height: size.height });
+	}
+	return new Blob([new Uint8Array(await pdf.save())], { type: 'application/pdf' });
 }

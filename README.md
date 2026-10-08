@@ -87,7 +87,7 @@ Las páginas de transferencia y solicitud reproducen los formatos de referencia 
 - Los gastos fuera del rango de fechas se conservan en el borrador, pero se excluyen del total. Los viajes largos usan hojas de continuación de 12 columnas; se admiten hasta 366 días.
 - Se mantienen las páginas de mapas y cotizaciones, con tres imágenes por página.
 
-Los datos de cada solicitud viven en la memoria de la página y se borran al recargar. La firma solo persiste cuando la persona acepta guardarla. La firma del PDF de referencia y sus datos de ejemplo no se incorporan a la plantilla. Los revisores y datos administrativos del formato permanecen fijos.
+Los borradores sin enviar viven en la memoria de la página y se borran al recargar. Al pulsar **Enviar solicitud**, los datos y adjuntos se guardan en D1 y aparecen en **Mis solicitudes** y **Administración**. La firma solo persiste cuando la persona acepta guardarla. La firma del PDF de referencia y sus datos de ejemplo no se incorporan a la plantilla. Los revisores y datos administrativos del formato permanecen fijos.
 
 Para exportar, pulsa **Generar PDF**. La aplicación prepara un archivo con transferencia y mapas en carta vertical, y solicitud en carta horizontal. El nombre usa el primer Service Ticket (o el primer ticket de proyecto si no hay Service Ticket) y el primer cliente seleccionado, por ejemplo `Solicitud de viáticos - Ticket 123 - Banco Gte.pdf`. Cuando esté listo, pulsa **Ver PDF** para revisarlo, **Compartir PDF** para abrir las aplicaciones disponibles en el sistema, o **Descargar PDF** para guardarlo y adjuntarlo manualmente. El menú de compartir depende del navegador y del sistema operativo; en producción requiere HTTPS. En `localhost` puedes probar la generación y descarga sin usar un correo real. La aplicación no envía mensajes: la persona elige la aplicación, revisa el destinatario y confirma el envío allí.
 
@@ -101,3 +101,84 @@ python scripts/build-request-template.py /ruta/al/pdf-de-solicitud.pdf
 ```
 
 Las muestras generadas y archivos temporales están excluidos de Git.
+
+## Administración y solicitudes persistentes
+
+**Enviar solicitud** guarda una versión completa del formulario, mapas, cotizaciones y firma de esa solicitud. Se conserva el flujo de generación de PDF. Los borradores sin enviar siguen siendo temporales. La cuenta bancaria permanece en el directorio privado y no se copia en las solicitudes ni se envía a administración. El nombre y propietario se obtienen en el servidor de la identidad verificada, y los montos se recalculan con el mismo modelo usado por el formulario.
+
+- **Mis solicitudes** muestra solamente los envíos de la persona autenticada. Una rechazada puede abrirse con **Editar y reenviar**, conservando todos sus datos y adjuntos. El reenvío mantiene su identificador, crea una nueva versión y vuelve a Pendientes. Pendientes y aceptadas quedan cerradas a edición; puede iniciarse una solicitud nueva.
+- **Administración** muestra una tabla con nombre, fecha de solicitud, entrada a administración, salida y regreso del viaje, clientes, destinos, tickets, kilómetros, monto y estado. Los desplegables incluyen objetivo, gastos por categoría y día, insumos y reparaciones. La tabla administrativa no devuelve cuentas, firmas ni imágenes. La consulta de una liquidación aceptada permite a administradores ver los comprobantes y la firma utilizada, sin exponer datos bancarios.
+- **Fecha de entrada** significa el momento en que la solicitud llega a administración, registrado por el servidor al enviar o reenviar. Se guarda en UTC y se muestra en horario de Guatemala. Las fechas del viaje son fechas de calendario sin conversiones horarias.
+- **Aceptar** y **Rechazar** requieren registrar la decisión desde el panel de revisión. La observación es opcional. Aceptadas quedan en su apartado; las aceptadas habilitan la liquidación del viaje.
+- `gpac@tecnasa.com` es el administrador principal inicial. Solo él puede agregar o quitar administradores desde **Administradores · Gestionar acceso**. Los administradores adicionales pueden revisar solicitudes, pero no gestionar permisos. El principal conserva su acceso. La identidad se verifica con Cloudflare Access antes de consultar los roles en D1; no existen permisos por botones, parámetros del navegador o almacenamiento local.
+
+La migración `0003_requests.sql` agrega tablas sin modificar cuentas ni firmas existentes. Aplicar **antes de publicar** el código:
+
+```bash
+pnpm exec wrangler d1 migrations apply proyecto-viaticos-accounts --local
+pnpm exec wrangler d1 execute proyecto-viaticos-accounts --local --file scripts/seed-local.sql
+# Producción, durante la publicación de esta versión:
+pnpm exec wrangler d1 migrations apply proyecto-viaticos-accounts --remote
+```
+
+`seed-local.sql` concede permisos de principal a `dev@tecnasa.com` únicamente en el entorno local. No ejecutar ese archivo contra producción.
+
+Los envíos usan UUID y una clave de reintento para evitar duplicados. Las decisiones y reenvíos comparan la versión vigente para impedir que dos revisores o dos pestañas sobrescriban cambios. Cada envío y decisión registra actor, estado, observación y momento. El almacenamiento del formulario, sus adjuntos y el evento se confirma en una transacción; un fallo revierte el envío completo. Se conservan las versiones anteriores.
+
+Esta versión admite hasta 8 MB por envío completo, hasta 30 imágenes PNG/JPG/WebP de hasta 5 MB cada una y viajes de hasta 366 días. El servidor valida esos límites y los datos; el usuario recibe un error si necesita reducir imágenes. Los snapshots JSON se dividen en filas de hasta 250.000 caracteres para respetar el [límite de tamaño de filas de D1](https://developers.cloudflare.com/d1/platform/limits/). El tamaño se controla también antes de interpretar JSON.
+
+### Migración a otro proveedor
+
+El modelo y los cálculos están en `src/request.ts` y `src/workflow.ts`. La interfaz `RequestRepository` separa la aplicación del adaptador `D1RequestRepository` en `worker/requestRepository.ts`. Los apartados también pueden abrirse directamente en `/mis-solicitudes` y `/administracion`. El frontend consume una API HTTP; migrar autenticación requiere sustituir el verificador de identidad, y migrar persistencia requiere implementar el contrato y conservar transacciones, auditoría y control de versiones. No basta con cambiar una URL.
+
+Para respaldar todos los datos, incluidos cuentas y firmas, usa la [exportación SQL oficial de D1](https://developers.cloudflare.com/d1/best-practices/import-export-data/):
+
+```bash
+pnpm exec wrangler d1 export proyecto-viaticos-accounts --remote --output /private/tmp/viaticos-backup.sql
+```
+
+Para migrar solicitudes sin depender del formato interno de filas o de D1, convierte ese respaldo a JSON:
+
+```bash
+python3 scripts/export-requests.py /private/tmp/viaticos-backup.sql --output /private/tmp/viaticos-requests.json
+```
+
+El JSON tiene `schemaVersion: 1`, importes en centavos de GTQ, kilómetros en centésimas, timestamps UTC, administradores, auditoría y todos los snapshots reconstruidos con sus adjuntos. No incluye cuentas bancarias ni las firmas personales del directorio; sí incluye las firmas usadas en cada solicitud. El respaldo SQL completo debe conservarse para migrar también el directorio. Los índices y triggers de la migración son SQL de SQLite y deberán adaptarse si el destino utiliza otro motor.
+
+Antes de cambiar de proveedor: detener temporalmente escrituras, exportar, importar en el destino, comparar cantidades de solicitudes/versiones/eventos y totales, comprobar el contenido de adjuntos y probar acceso por propietario, rechazo/reenvío y revisión simultánea. Cambiar el tráfico solamente después de esas comprobaciones. Conservar el respaldo de forma privada fuera de Git.
+
+## Navegación y formulario por bloques
+
+El botón **Menú**, en la esquina superior, reúne Solicitud, Mis solicitudes, Administración (según los permisos) y Nueva solicitud. Se puede cerrar al elegir una opción, pulsar Escape o tocar fuera. **Generar PDF** aparece junto a **Enviar solicitud**.
+
+Transferencia aparece contraída cuando la cuenta está guardada. Fechas y colaborador, destinos, objetivo y clientes, y tickets muestran un resumen y se contraen al continuar fuera de un bloque completo. Un bloque reabierto para revisar permanece abierto hasta cerrarlo o editarlo y continuar. Los gastos y adjuntos conservan cierre manual para permitir completar varios días o imágenes. Los errores de validación abren los bloques del formulario. En pantallas pequeñas, el formulario aparece antes de la vista previa.
+
+### Pegar capturas de mapas y cotizaciones
+
+En **Mapas y cotizaciones**, copia la captura como imagen, selecciona la zona **Pega aquí tu captura** y pulsa **Ctrl+V** o **⌘+V**. También puedes usar **Pegar imagen**; el navegador puede solicitar permiso para leer el portapapeles. Si el permiso se rechaza o el botón no está disponible, usa la zona de pegado o **Elegir archivo**. No es necesario guardar la captura en el equipo.
+
+Ambas opciones reutilizan la carga, validación y decodificación de los archivos adjuntos. Se conservan los límites de 30 imágenes, 5 MB por imagen y 8 MB por envío. Una imagen pegada aparece en la lista y en la vista previa del PDF, con kilómetros y fecha para completar. Pegar texto en los demás campos sigue funcionando normalmente. La lectura del portapapeles ocurre únicamente al pegar en la zona o pulsar el botón. No cambia la API ni el esquema de la base de datos.
+
+## Liquidación de viáticos
+
+Desde **Mis solicitudes**, una solicitud aceptada ofrece **Liquidar solicitud**. **Menú → Mis liquidaciones** reúne las aceptadas con estados Por liquidar, Borrador y Finalizada. Las pendientes y rechazadas no habilitan el cierre. El acceso directo a un expediente usa `/liquidaciones?solicitud=<id>`.
+
+El formulario conserva colaborador, fechas, clientes, tickets, monto autorizado y firma de la solicitud aceptada. Permite editar fecha de liquidación, departamento y observaciones. Cada factura tiene fecha, serie, número de DTE (texto, conserva ceros), NIT, proveedor, concepto y monto. IDP, base e IVA son opcionales y se copian del comprobante; no se infieren impuestos. El monto autorizado se usa también como monto depositado, como en las referencias actuales; esta versión no registra transferencias bancarias reales.
+
+**Factura / Reintegro** cambia el tipo de la siguiente carga. También puede cambiarse desde cada comprobante. Los reintegros registran devoluciones a TECNASA y quedan fuera de los gastos y sus impuestos. El resumen calcula saldo a reintegrar, reintegro adjunto, saldo pendiente y, si corresponde, saldo a favor del colaborador, con sumas en centavos.
+
+Se pueden elegir varias imágenes o pegar capturas. El navegador optimiza las imágenes (hasta 1600 píxeles en su lado mayor) y recorta únicamente márgenes casi blancos, con un margen protector. **Recortar márgenes** permite recuperar la imagen completa; **Ajustar imagen** permite girarla o recortar manualmente el fondo con vista previa. Las fotos cuyo fondo no es blanco conservan sus bordes hasta ajustar el recorte. Las imágenes originales optimizadas y sus recortes quedan en el expediente privado.
+
+**Guardar borrador** permite continuar tras recargar. **Finalizar liquidación** valida datos, fechas dentro del viaje, serie/DTE repetidos, montos y comprobantes de reintegro que cubran el saldo a devolver, y muestra un resumen antes de cerrar. Una finalizada queda en consulta y descarga. Administración puede consultarla desde la fila aceptada mediante **Ver liquidación**; no modifica el expediente del colaborador.
+
+**Generar PDF** produce la hoja de liquidación horizontal con las columnas de los ejemplos (Fecha, Serie / DTE, NIT, Nombre, Concepto, Valor, IDP, Base e IVA), totales y espacios de firma. Hay hojas de continuación si excede 15 facturas. Las hojas de comprobantes son carta vertical, con **dos imágenes verticales por hoja**, conservando proporciones y mostrando tipo, serie/DTE y monto. Un número impar deja el segundo espacio vacío. Facturas y reintegros mantienen el orden de carga. Un borrador puede generar una vista de trabajo; finaliza la liquidación para validar el expediente completo.
+
+La migración aditiva `0004_liquidations.sql` debe aplicarse antes de publicar esta versión usando el [flujo de migraciones de D1](https://developers.cloudflare.com/d1/reference/migrations/):
+
+```bash
+pnpm exec wrangler d1 migrations apply proyecto-viaticos-accounts --local
+# Al publicar en producción:
+pnpm exec wrangler d1 migrations apply proyecto-viaticos-accounts --remote
+```
+
+No agrega bindings. Las escrituras comparan revisión y propietario, exigen una solicitud aceptada, usan claves de reintento y confirman metadatos, comprobantes y auditoría en una transacción. Se conservan versiones anteriores. La solicitud aprobada no se modifica. El expediente completo admite hasta 8 MB y 30 comprobantes; cada archivo de entrada puede tener hasta 10 MB antes de optimizarse. La exportación SQL completa de D1 incluye estas tablas. El exportador JSON de solicitudes existente no incluye liquidaciones; para respaldo o migración del cierre, conserva la exportación SQL completa.
