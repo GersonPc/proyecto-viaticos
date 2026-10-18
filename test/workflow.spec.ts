@@ -10,12 +10,13 @@ const databases: DatabaseSync[] = [];
 afterEach(() => {
 	for (const db of databases.splice(0)) db.close();
 });
-function setup() {
+function setup(withLiquidations = true) {
 	const database = new DatabaseSync(':memory:');
 	databases.push(database);
 	database.exec('PRAGMA foreign_keys=ON');
-	for (const migration of ['0001_accounts', '0002_signatures', '0003_requests', '0004_liquidations'])
-		database.exec(readFileSync(new URL(`../migrations/${migration}.sql`, import.meta.url), 'utf8'));
+	const migrations = ['0001_accounts', '0002_signatures', '0003_requests'];
+	if (withLiquidations) migrations.push('0004_liquidations');
+	for (const migration of migrations) database.exec(readFileSync(new URL(`../migrations/${migration}.sql`, import.meta.url), 'utf8'));
 	database.exec("INSERT INTO employee_accounts VALUES ('user@tecnasa.com','Nombre verificado','00123','Ahorros','Banco privado')");
 	let failChunk = false;
 	const prepare = (sql: string) => {
@@ -335,6 +336,26 @@ async function accepted(call: ReturnType<typeof setup>['call']) {
 	return item;
 }
 describe('liquidación vinculada a solicitudes aceptadas', () => {
+	it('recupera lista, apertura y guardado al aplicar la migración pendiente sin cambiar las solicitudes ni cuentas', async () => {
+		const { call, database } = setup(false);
+		const item = await accepted(call);
+		const path = `/api/requests/${item.id}/liquidation`;
+		const mutation = { revision: 0, key: crypto.randomUUID(), status: 'draft', data: { ...initialLiquidation(), receipts: [invoice()] } };
+		const requestsBefore = database.prepare('SELECT * FROM travel_requests').all();
+		const accountsBefore = database.prepare('SELECT * FROM employee_accounts').all();
+		expect((await call('/api/liquidations')).status).toBe(503);
+		expect((await call(path)).status).toBe(503);
+		expect((await call(path, 'PUT', mutation)).status).toBe(503);
+
+		database.exec(readFileSync(new URL('../migrations/0004_liquidations.sql', import.meta.url), 'utf8'));
+		expect((await call('/api/liquidations')).status).toBe(200);
+		expect((await call(path)).status).toBe(200);
+		expect((await call(path, 'PUT', mutation)).status).toBe(200);
+		const restored = (await (await call(path)).json()) as { liquidation: LiquidationRecord };
+		expect(restored.liquidation.data).toEqual(mutation.data);
+		expect(database.prepare('SELECT * FROM travel_requests').all()).toEqual(requestsBefore);
+		expect(database.prepare('SELECT * FROM employee_accounts').all()).toEqual(accountsBefore);
+	});
 	it('solo permite iniciar una aceptada del propietario y restringe administración a consulta', async () => {
 		const { call } = setup();
 		const { item } = await create(call);

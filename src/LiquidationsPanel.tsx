@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, jsonOptions } from './api';
 import { createPortal } from 'react-dom';
-import { formatDate, money } from './request';
+import { formatDate, money, toCents, validDecimal } from './request';
 import { pastedImageFiles, readClipboardImages } from './imageClipboard';
 import { prepareReceiptImage, cropReceipt, rotateReceipt } from './receiptImage';
 import { createLiquidationPdf } from './pdf';
@@ -614,8 +614,9 @@ function ReceiptCard({
 	remove: () => void;
 }) {
 	const imageDialog = useRef<HTMLDialogElement>(null);
+	const [expanded, setExpanded] = useState(true);
 	return (
-		<article className="receipt-card">
+		<details className="receipt-card" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
 			{createPortal(
 				<dialog
 					ref={imageDialog}
@@ -634,20 +635,31 @@ function ReceiptCard({
 				</dialog>,
 				document.body,
 			)}
-			<div className="receipt-card-heading">
-				<h3>
-					{r.kind === 'refund' ? 'Reintegro' : 'Factura'} {index + 1}
-				</h3>
-				<button
-					type="button"
-					className="receipt-remove"
-					disabled={disabled}
-					onClick={remove}
-					aria-label={`Eliminar comprobante ${index + 1}`}
-				>
-					Eliminar
-				</button>
-			</div>
+			<summary className="receipt-card-heading">
+				<div className="receipt-card-title">
+					<h3>
+						{r.kind === 'refund' ? 'Reintegro' : 'Factura'} {index + 1}
+					</h3>
+					{!expanded && (
+						<p className="receipt-summary">
+							<strong>{r.issuer || (r.kind === 'refund' ? 'Devolución a TECNASA' : r.name)}</strong>
+							<span>
+								{[r.series && `Serie: ${r.series}`, r.dte && `${r.kind === 'refund' ? 'Referencia' : 'DTE'}: ${r.dte}`]
+									.filter(Boolean)
+									.join(' · ')}
+							</span>
+						</p>
+					)}
+				</div>
+				<div className="receipt-card-actions">
+					{!expanded && r.amount && validDecimal(r.amount) && (
+						<strong className="receipt-summary-amount">Q {money(toCents(r.amount))}</strong>
+					)}
+					<span className="receipt-collapse-label">
+						{expanded ? 'Contraer' : 'Ver detalles'} <span aria-hidden="true">{expanded ? '⌃' : '⌄'}</span>
+					</span>
+				</div>
+			</summary>
 			<div className="receipt-card-body">
 				<div className="receipt-image-column">
 					<a
@@ -783,9 +795,18 @@ function ReceiptCard({
 							</p>
 						</>
 					)}
+					<button
+						type="button"
+						className="receipt-remove"
+						disabled={disabled}
+						onClick={remove}
+						aria-label={`Eliminar comprobante ${index + 1}`}
+					>
+						Eliminar comprobante
+					</button>
 				</div>
 			</div>
-		</article>
+		</details>
 	);
 }
 
@@ -793,11 +814,11 @@ function ReceiptAdjuster({ receipt, process }: { receipt: Receipt; process: (ope
 	const [edges, setEdges] = useState({ left: 0, right: 0, top: 0, bottom: 0 });
 	const labels = { left: 'Izquierda', right: 'Derecha', top: 'Arriba', bottom: 'Abajo' };
 	return (
-		<details className="receipt-adjuster">
-			<summary>Ajustar imagen</summary>
+		<div className="receipt-adjuster">
 			<button
 				type="button"
-				className="secondary-button"
+				className="secondary-button receipt-rotate"
+				aria-label="Rotar comprobante 90° a la derecha"
 				onClick={() =>
 					process(async () => {
 						const originalSrc = await rotateReceipt(receipt.originalSrc);
@@ -806,31 +827,35 @@ function ReceiptAdjuster({ receipt, process }: { receipt: Receipt; process: (ope
 					})
 				}
 			>
-				Girar 90°
+				<span aria-hidden="true">↻</span> Rotar 90°
 			</button>
-			<p className="field-note">Recorta el fondo y conserva todos los datos de la factura.</p>
-			<div className="receipt-crop-preview">
-				<img
-					src={receipt.originalSrc}
-					alt="Vista previa del recorte"
-					style={{ clipPath: `inset(${edges.top}% ${edges.right}% ${edges.bottom}% ${edges.left}%)` }}
-				/>
-			</div>
-			{(Object.keys(labels) as (keyof typeof labels)[]).map((k) => (
-				<label key={k}>
-					{labels[k]} · {edges[k]}%
-					<input
-						type="range"
-						min="0"
-						max="45"
-						value={edges[k]}
-						onChange={(e) => setEdges((v) => ({ ...v, [k]: Number(e.target.value) }))}
+			<p className="field-note">Cada clic gira la imagen a la derecha.</p>
+			<details className="receipt-crop-controls">
+				<summary>Recortar imagen</summary>
+				<p className="field-note">Recorta el fondo y conserva todos los datos de la factura.</p>
+				<div className="receipt-crop-preview">
+					<img
+						src={receipt.originalSrc}
+						alt="Vista previa del recorte"
+						style={{ clipPath: `inset(${edges.top}% ${edges.right}% ${edges.bottom}% ${edges.left}%)` }}
 					/>
-				</label>
-			))}
-			<button type="button" className="secondary-button" onClick={() => process(() => cropReceipt(receipt.originalSrc, edges))}>
-				Aplicar recorte
-			</button>
-		</details>
+				</div>
+				{(Object.keys(labels) as (keyof typeof labels)[]).map((k) => (
+					<label key={k}>
+						{labels[k]} · {edges[k]}%
+						<input
+							type="range"
+							min="0"
+							max="45"
+							value={edges[k]}
+							onChange={(e) => setEdges((v) => ({ ...v, [k]: Number(e.target.value) }))}
+						/>
+					</label>
+				))}
+				<button type="button" className="secondary-button" onClick={() => process(() => cropReceipt(receipt.originalSrc, edges))}>
+					Aplicar recorte
+				</button>
+			</details>
+		</div>
 	);
 }

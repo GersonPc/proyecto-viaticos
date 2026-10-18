@@ -38,3 +38,16 @@ La migración conservó las 24 cuentas y la firma existente. Solo `gpac@tecnasa.
 La restauración de D1 es una recuperación excepcional: reemplaza toda la base y puede perder escrituras posteriores al punto seleccionado. Antes de usarla, detener escrituras, exportar el estado actual y evaluar qué datos posteriores se conservarán. El punto anterior a esta publicación está registrado en `release.json`; no se ejecutó ninguna restauración. [Documentación oficial de Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/).
 
 Estos archivos son una copia local. Para protegerse de la pérdida de este equipo, guardarlos en el almacenamiento privado de respaldos de la organización.
+
+## Corrección de liquidaciones
+
+9 de octubre de 2026, hora de Guatemala.
+
+- Se actualizó la rama principal local hasta `58b1164`, igual a `origin/main`, sin cambios locales pendientes antes de la actualización.
+- La base publicada tenía aplicadas las migraciones `0001`, `0002` y `0003`. Faltaba `0004_liquidations.sql` y no existían las tablas `travel_liquidations`, `liquidation_chunks` ni `liquidation_events`. Las rutas de lista, apertura y guardado dependían de esas tablas y devolvían el error genérico 503.
+- Se aplicó únicamente la migración pendiente con `wrangler d1 migrations apply proyecto-viaticos-accounts --remote`. Después se verificaron las tres tablas, sus dos triggers de auditoría y el registro de las cuatro migraciones aplicadas.
+- Antes y después: 24 cuentas, 1 firma y 3 solicitudes. No se editaron ni eliminaron esos registros; la migración agrega tablas y triggers. No se crearon liquidaciones de prueba en producción ni se republicó el Worker.
+- Una prueba de regresión reproduce los errores de lista, apertura y guardado sin `0004`, aplica la migración y verifica respuestas 200, recuperación del borrador y conservación de las cuentas y solicitudes. Validación: 90 pruebas, tipos, lint, formato, bindings y compilación correctos.
+- La comprobación visual en producción requiere iniciar sesión en Cloudflare Access. La base publicada se verificó directamente, pero no se dispone de una sesión de usuario para confirmar la interfaz publicada.
+
+La configuración actual de Workers Builds ejecuta `npx wrangler deploy`; no aplica las migraciones de D1. Ejecutarlas contra producción antes de publicar futuros cambios de esquema. Actualizar Git o aplicar migraciones locales no sustituye ese paso.

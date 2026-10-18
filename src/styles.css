@@ -1897,9 +1897,69 @@ button:disabled {
 	cursor: pointer;
 }
 .receipt-card-heading {
-	align-items: baseline;
+	align-items: center;
 	border-bottom: 1px solid #eee;
 	margin-bottom: 18px;
+	gap: 14px;
+	cursor: pointer;
+	list-style: none;
+}
+.receipt-card-heading::-webkit-details-marker {
+	display: none;
+}
+.receipt-card-heading:focus-visible {
+	outline: 2px solid #61985b;
+	outline-offset: 6px;
+	border-radius: 4px;
+}
+.receipt-card:not([open]) > .receipt-card-heading {
+	border-bottom: 0;
+	margin-bottom: 0;
+}
+.receipt-card-title {
+	min-width: 0;
+}
+.receipt-card-heading h3 {
+	margin: 0;
+}
+.receipt-card[open] > .receipt-card-heading {
+	padding-bottom: 16px;
+}
+.receipt-card-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 10px;
+	flex-shrink: 0;
+}
+.receipt-collapse-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 11px;
+	border-radius: 8px;
+	background: #f1f7ef;
+	color: #46633f;
+	font-size: 12px;
+	font-weight: 600;
+}
+.receipt-summary {
+	display: grid;
+	gap: 5px;
+	margin: 8px 0 0;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+.receipt-summary strong {
+	color: var(--ink);
+	font-weight: 500;
+}
+.receipt-summary-amount {
+	font-size: 14px;
+	white-space: nowrap;
 }
 .receipt-remove {
 	border: 0;
@@ -2112,6 +2172,14 @@ button:disabled {
 	.receipt-card {
 		padding: 16px;
 	}
+	.receipt-card-heading {
+		align-items: flex-start;
+	}
+	.receipt-card-actions {
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 7px;
+	}
 	.liquidation-actions > div {
 		width: 100%;
 	}
@@ -2134,6 +2202,21 @@ button:disabled {
 .receipt-adjuster .secondary-button {
 	padding: 8px 10px;
 	font-size: 11px;
+}
+.receipt-adjuster .receipt-rotate {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 7px;
+	width: 100%;
+	min-height: 40px;
+}
+.receipt-rotate > span {
+	font-size: 20px;
+	line-height: 1;
+}
+.receipt-crop-controls {
+	margin-top: 12px;
 }
 .receipt-crop-preview {
 	height: auto;
